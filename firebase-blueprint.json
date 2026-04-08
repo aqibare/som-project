@@ -1,0 +1,143 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Private user profile information.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["supervisor", "admin", "intern"] },
+        "supervisorId": { "type": "string" },
+        "codeId": { "type": "string" },
+        "password": { "type": "string" },
+        "institution": { "type": "string" },
+        "nim": { "type": "string" },
+        "semester": { "type": "string" },
+        "major": { "type": "string" },
+        "department": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "PublicUser": {
+      "title": "PublicUser",
+      "description": "Public user profile information accessible to others.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["supervisor", "admin", "intern"] }
+      },
+      "required": ["id", "name", "role"]
+    },
+    "Goal": {
+      "title": "Goal",
+      "description": "An intern's goal or task.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "progress": { "type": "number" },
+        "category": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "completed": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "required": ["id", "userId", "title", "progress", "category", "steps"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Daily attendance record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "checkIn": { "type": "string" },
+        "checkOut": { "type": "string" },
+        "status": { "type": "string", "enum": ["present", "absent", "late"] }
+      },
+      "required": ["id", "userId", "date", "checkIn", "status"]
+    },
+    "Evaluation": {
+      "title": "Evaluation",
+      "description": "Performance evaluation for an intern.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "internId": { "type": "string" },
+        "score": { "type": "number" },
+        "feedback": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "reaction": { "type": "string" }
+      },
+      "required": ["id", "internId", "score", "feedback", "date"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "System or user notification.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["warning", "info", "error"] },
+        "date": { "type": "string" },
+        "read": { "type": "boolean" }
+      },
+      "required": ["id", "userId", "title", "message", "type", "date", "read"]
+    },
+    "Schedule": {
+      "title": "Schedule",
+      "description": "Global working hours schedule.",
+      "type": "object",
+      "properties": {
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" }
+      },
+      "required": ["startTime", "endTime"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private user profiles."
+    },
+    "/public_users/{userId}": {
+      "schema": "PublicUser",
+      "description": "Public user profiles."
+    },
+    "/goals/{goalId}": {
+      "schema": "Goal",
+      "description": "Intern goals."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Attendance records."
+    },
+    "/evaluations/{evaluationId}": {
+      "schema": "Evaluation",
+      "description": "Intern evaluations."
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications."
+    },
+    "/settings/schedule": {
+      "schema": "Schedule",
+      "description": "Global schedule settings."
+    }
+  }
+}

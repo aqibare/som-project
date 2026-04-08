@@ -4,43 +4,47 @@ import { User, Role, Attendance, Schedule, Notification } from '../types';
 import { MockUser, Goal, Evaluation } from '../mockData';
 import { 
   LogOut, Shield, UserCircle, Briefcase, Bell, Settings, Search, 
-  Users, UserPlus, Link as LinkIcon, MoreVertical, Trash2, Edit2, Check,
-  Target, TrendingUp, Plus, ArrowUpRight, Activity, Clock, Calendar, AlertTriangle
+  Users, UserPlus, Link as LinkIcon, MoreVertical, Trash2, Edit2, Check, X,
+  Target, TrendingUp, Plus, ArrowUpRight, Activity, Clock, Calendar, AlertTriangle,
+  Camera
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { db, secondaryAuth, auth } from '../../firebase';
+import { 
+  doc, 
+  updateDoc, 
+  addDoc, 
+  collection, 
+  setDoc, 
+  deleteDoc,
+  serverTimestamp,
+  getDoc
+} from 'firebase/firestore';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
+import { handleFirestoreError, OperationType } from '../lib/firebaseUtils';
+import { KeyRound, Hash, Mail, User as UserIcon, ShieldCheck } from 'lucide-react';
 
 interface DashboardProps {
   user: User;
   onLogout: () => void;
   mockUsers: MockUser[];
-  setMockUsers: React.Dispatch<React.SetStateAction<MockUser[]>>;
   goals: Goal[];
-  setGoals: React.Dispatch<React.SetStateAction<Goal[]>>;
   attendance: Attendance[];
-  setAttendance: React.Dispatch<React.SetStateAction<Attendance[]>>;
   evaluations: Evaluation[];
-  setEvaluations: React.Dispatch<React.SetStateAction<Evaluation[]>>;
   schedule: Schedule;
-  setSchedule: React.Dispatch<React.SetStateAction<Schedule>>;
   notifications: Notification[];
-  setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
 }
 
 export default function Dashboard({ 
   user, 
   onLogout,
   mockUsers,
-  setMockUsers,
   goals,
-  setGoals,
   attendance,
-  setAttendance,
   evaluations,
-  setEvaluations,
   schedule,
-  setSchedule,
-  notifications,
-  setNotifications
+  notifications
 }: DashboardProps) {
   const [selectedSupervisor, setSelectedSupervisor] = useState('');
   const [selectedIntern, setSelectedIntern] = useState('');
@@ -50,6 +54,7 @@ export default function Dashboard({
   // Intern specific state
   const [newGoalTitle, setNewGoalTitle] = useState('');
   const [newGoalCategory, setNewGoalCategory] = useState('Technical');
+  const [newGoalSteps, setNewGoalSteps] = useState<string[]>(['']);
   const [showGoalSuccess, setShowGoalSuccess] = useState(false);
   const [checkInLog, setCheckInLog] = useState<{ id: string; goalTitle: string; date: string }[]>([]);
 
@@ -64,6 +69,50 @@ export default function Dashboard({
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [tempStartTime, setTempStartTime] = useState(schedule.startTime);
   const [tempEndTime, setTempEndTime] = useState(schedule.endTime);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [userForm, setUserForm] = useState({
+    name: '',
+    email: '',
+    role: 'intern' as Role,
+    codeId: '',
+    password: 'Password123',
+    institution: '',
+    nim: '',
+    semester: '',
+    major: '',
+    department: ''
+  });
+  const [isProcessingUser, setIsProcessingUser] = useState(false);
+  const [userError, setUserError] = useState<string | null>(null);
+  const [showUserSuccess, setShowUserSuccess] = useState(false);
+
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'profile'>('dashboard');
+  const [profileForm, setProfileForm] = useState({
+    name: user.name,
+    email: user.email,
+    photoURL: user.photoURL || `https://picsum.photos/seed/${user.id}/200/200`,
+    institution: user.institution || '',
+    nim: user.nim || '',
+    semester: user.semester || '',
+    major: user.major || '',
+    department: user.department || ''
+  });
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [profileSuccess, setProfileSuccess] = useState(false);
+
+  React.useEffect(() => {
+    setProfileForm({
+      name: user.name,
+      email: user.email,
+      photoURL: user.photoURL || `https://picsum.photos/seed/${user.id}/200/200`,
+      institution: user.institution || '',
+      nim: user.nim || '',
+      semester: user.semester || '',
+      major: user.major || '',
+      department: user.department || ''
+    });
+  }, [user]);
 
   const today = new Date().toISOString().split('T')[0];
   const userAttendanceToday = attendance.find(a => a.userId === user.id && a.date === today);
@@ -91,15 +140,18 @@ export default function Dashboard({
 
             if (!alreadyNotifiedIntern) {
               // Notification for Intern
-              newNotifications.push({
-                id: Math.random().toString(36).substr(2, 9),
+              const notificationId = Math.random().toString(36).substr(2, 9);
+              const notificationData = {
+                id: notificationId,
                 userId: intern.id,
                 title: 'Attendance Warning',
                 message: `You haven't checked in yet! Working hours started at ${schedule.startTime}.`,
                 type: 'warning',
                 date: currentToday,
                 read: false
-              });
+              };
+              addDoc(collection(db, 'notifications'), notificationData)
+                .catch(err => handleFirestoreError(err, OperationType.CREATE, 'notifications'));
             }
 
             // Notification for Supervisor
@@ -112,8 +164,9 @@ export default function Dashboard({
               );
 
               if (!alreadyNotifiedSupervisor) {
-                newNotifications.push({
-                  id: Math.random().toString(36).substr(2, 9),
+                const notificationId = Math.random().toString(36).substr(2, 9);
+                const notificationData = {
+                  id: notificationId,
                   userId: intern.supervisorId,
                   senderId: intern.id,
                   title: 'Intern Late/Absent',
@@ -121,22 +174,20 @@ export default function Dashboard({
                   type: 'error',
                   date: currentToday,
                   read: false
-                });
+                };
+                addDoc(collection(db, 'notifications'), notificationData)
+                  .catch(err => handleFirestoreError(err, OperationType.CREATE, 'notifications'));
               }
             }
           }
         });
-
-        if (newNotifications.length > 0) {
-          setNotifications(prev => [...newNotifications, ...prev]);
-        }
       }
     };
 
     const interval = setInterval(checkLateInterns, 60000); // Check every minute
     checkLateInterns(); // Initial check
     return () => clearInterval(interval);
-  }, [schedule, mockUsers, attendance, notifications, setNotifications]);
+  }, [schedule, mockUsers, attendance, notifications]);
 
   // Helper for supervisor to get intern stats
   const getInternStats = (internId: string) => {
@@ -157,7 +208,7 @@ export default function Dashboard({
     return { goalsMet, totalGoals, avgScore, overallProgress, internGoals };
   };
 
-  const handleDailyCheckIn = () => {
+  const handleDailyCheckIn = async () => {
     if (userAttendanceToday) return;
     const now = new Date();
     const checkInTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -166,14 +217,21 @@ export default function Dashboard({
     const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
     const isLate = now.getHours() > startHour || (now.getHours() === startHour && now.getMinutes() > startMinute);
 
+    const attendanceId = Math.random().toString(36).substr(2, 9);
     const newAttendance: Attendance = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: attendanceId,
       userId: user.id,
+      supervisorId: user.supervisorId || null,
       date: today,
       checkIn: checkInTime,
       status: isLate ? 'late' : 'present'
     };
-    setAttendance(prev => [newAttendance, ...prev]);
+    
+    try {
+      await addDoc(collection(db, 'attendance'), newAttendance);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'attendance');
+    }
 
     // If late, notify supervisor
     if (isLate) {
@@ -188,8 +246,9 @@ export default function Dashboard({
         );
 
         if (!alreadyNotified) {
-          const lateNotification: Notification[] = [{
-            id: Math.random().toString(36).substr(2, 9),
+          const notificationId = Math.random().toString(36).substr(2, 9);
+          const lateNotification = {
+            id: notificationId,
             userId: intern.supervisorId,
             senderId: user.id,
             title: 'Intern Late Check-in',
@@ -197,20 +256,27 @@ export default function Dashboard({
             type: 'warning',
             date: today,
             read: false
-          }];
-          setNotifications(prev => [...lateNotification, ...prev]);
+          };
+          try {
+            await addDoc(collection(db, 'notifications'), lateNotification);
+          } catch (err) {
+            handleFirestoreError(err, OperationType.CREATE, 'notifications');
+          }
         }
       }
     }
   };
 
-  const handleDailyCheckOut = () => {
+  const handleDailyCheckOut = async () => {
     if (!userAttendanceToday || userAttendanceToday.checkOut) return;
-    setAttendance(prev => prev.map(a => 
-      a.id === userAttendanceToday.id 
-        ? { ...a, checkOut: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } 
-        : a
-    ));
+    
+    try {
+      await updateDoc(doc(db, 'attendance', userAttendanceToday.id), {
+        checkOut: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `attendance/${userAttendanceToday.id}`);
+    }
   };
 
   const getRoleColor = (role: Role) => {
@@ -230,13 +296,24 @@ export default function Dashboard({
     }
   };
 
-  const handleAssign = (e: React.FormEvent) => {
+  const handleAssign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSupervisor || !selectedIntern) return;
 
-    setMockUsers(prev => prev.map(u => 
-      u.id === selectedIntern ? { ...u, supervisorId: selectedSupervisor } : u
-    ));
+    try {
+      const assignedAt = new Date().toISOString().split('T')[0];
+      await updateDoc(doc(db, 'users', selectedIntern), {
+        supervisorId: selectedSupervisor,
+        assignedAt: assignedAt
+      });
+      // Also update public profile if needed
+      await updateDoc(doc(db, 'public_users', selectedIntern), {
+        supervisorId: selectedSupervisor,
+        assignedAt: assignedAt
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${selectedIntern}`);
+    }
 
     setShowAssignSuccess(true);
     setTimeout(() => setShowAssignSuccess(false), 3000);
@@ -244,55 +321,296 @@ export default function Dashboard({
     setSelectedIntern('');
   };
 
-  const handleAddGoal = (e: React.FormEvent) => {
+  const handleAddGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGoalTitle.trim()) return;
 
-    const newGoal: Goal = {
-      id: Math.random().toString(36).substr(2, 9),
+    const filteredSteps = newGoalSteps.filter(s => s.trim() !== '');
+    if (filteredSteps.length === 0) {
+      setUserError("Please add at least one milestone.");
+      return;
+    }
+
+    const goalId = Math.random().toString(36).substr(2, 9);
+    const newGoal = {
+      id: goalId,
       userId: user.id,
+      supervisorId: user.supervisorId || null,
       title: newGoalTitle,
       progress: 0,
       category: newGoalCategory,
-      steps: [
-        { id: Math.random().toString(36).substr(2, 9), title: 'Initial Research', completed: false },
-        { id: Math.random().toString(36).substr(2, 9), title: 'Implementation', completed: false },
-        { id: Math.random().toString(36).substr(2, 9), title: 'Testing', completed: false },
-      ]
+      steps: filteredSteps.map(title => ({
+        id: Math.random().toString(36).substr(2, 9),
+        title,
+        completed: false
+      })),
+      createdAt: new Date().toISOString()
     };
 
-    setGoals(prev => [newGoal, ...prev]);
-    setNewGoalTitle('');
-    setNewGoalCategory('Technical');
-    setShowGoalSuccess(true);
-    setTimeout(() => setShowGoalSuccess(false), 3000);
+    try {
+      await setDoc(doc(db, 'goals', goalId), newGoal);
+      setNewGoalTitle('');
+      setNewGoalCategory('Technical');
+      setNewGoalSteps(['']);
+      setShowGoalSuccess(true);
+      setTimeout(() => setShowGoalSuccess(false), 3000);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'goals');
+    }
   };
 
-  const handleToggleStep = (goalId: string, stepId: string) => {
-    setGoals(prev => prev.map(g => {
-      if (g.id === goalId) {
-        const updatedSteps = g.steps.map(s => 
-          s.id === stepId ? { ...s, completed: !s.completed } : s
-        );
-        const completedCount = updatedSteps.filter(s => s.completed).length;
-        const nextProgress = Math.round((completedCount / updatedSteps.length) * 100);
-        return { ...g, steps: updatedSteps, progress: nextProgress };
+  const handleAddStepInput = () => {
+    setNewGoalSteps([...newGoalSteps, '']);
+  };
+
+  const handleStepInputChange = (index: number, value: string) => {
+    const updatedSteps = [...newGoalSteps];
+    updatedSteps[index] = value;
+    setNewGoalSteps(updatedSteps);
+  };
+
+  const handleRemoveStepInput = (index: number) => {
+    if (newGoalSteps.length > 1) {
+      const updatedSteps = newGoalSteps.filter((_, i) => i !== index);
+      setNewGoalSteps(updatedSteps);
+    }
+  };
+
+  const handleSaveUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsProcessingUser(true);
+    setUserError(null);
+
+    try {
+      if (editingUser) {
+        // Update existing user
+        const userRef = doc(db, 'users', editingUser.id);
+        const publicUserRef = doc(db, 'public_users', editingUser.id);
+        
+        const updatedData = {
+          name: userForm.name,
+          role: userForm.role,
+          codeId: userForm.codeId,
+          password: userForm.password,
+          institution: userForm.institution,
+          nim: userForm.nim,
+          semester: userForm.semester,
+          major: userForm.major,
+          department: userForm.department
+        };
+
+        await updateDoc(userRef, updatedData);
+        await updateDoc(publicUserRef, {
+          name: userForm.name,
+          role: userForm.role
+        });
+        
+        setShowUserSuccess(true);
+        setTimeout(() => setShowUserSuccess(false), 3000);
+      } else {
+        // Create new user
+        if (userForm.role !== 'admin' && !userForm.codeId) {
+          throw new Error("Code ID is required for Interns and Supervisors.");
+        }
+
+        // For intern/supervisor, we use codeId@som.portal as email for Auth
+        const authEmail = userForm.role === 'admin' ? userForm.email : `${userForm.codeId.toLowerCase().replace(/\s+/g, '')}@som.portal`;
+        
+        // 1. Create in Firebase Auth using secondary app
+        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, authEmail, userForm.password);
+        const uid = userCredential.user.uid;
+
+        // 2. Create profile in Firestore
+        const newUser: User = {
+          id: uid,
+          name: userForm.name,
+          email: userForm.email || authEmail,
+          role: userForm.role,
+          codeId: userForm.codeId,
+          password: userForm.password,
+          institution: userForm.institution,
+          nim: userForm.nim,
+          semester: userForm.semester,
+          major: userForm.major,
+          department: userForm.department
+        };
+
+        await setDoc(doc(db, 'users', uid), newUser);
+        await setDoc(doc(db, 'public_users', uid), {
+          id: uid,
+          name: userForm.name,
+          role: userForm.role
+        });
+
+        setShowUserSuccess(true);
+        setTimeout(() => setShowUserSuccess(false), 3000);
       }
-      return g;
-    }));
+      setShowUserModal(false);
+      setEditingUser(null);
+      setUserForm({ 
+        name: '', 
+        email: '', 
+        role: 'intern', 
+        codeId: '', 
+        password: 'Password123',
+        institution: '',
+        nim: '',
+        semester: '',
+        major: '',
+        department: ''
+      });
+    } catch (err: any) {
+      console.error("Error saving user:", err);
+      if (err.code === 'auth/operation-not-allowed') {
+        setUserError(`Firebase Error: Email/Password provider is not enabled for Project ID: "${firebaseConfig.projectId}". 
+        
+        Please ensure you have:
+        1. Opened the Firebase Console for THIS specific project.
+        2. Gone to Authentication > Sign-in method.
+        3. Enabled "Email/Password" (the first toggle, NOT "Email link").
+        4. Clicked "Save".`);
+      } else if (err.code === 'auth/email-already-in-use') {
+        setUserError("This email or Code ID is already in use.");
+      } else if (err.code === 'auth/weak-password') {
+        setUserError("The password is too weak. Please use at least 6 characters.");
+      } else if (err.code === 'auth/invalid-email') {
+        setUserError(`The email format is not valid. Attempted to use: "${userForm.role === 'admin' ? userForm.email : `${userForm.codeId.toLowerCase().replace(/\s+/g, '')}@som.portal`}"`);
+      } else if (err.code === 'permission-denied') {
+        setUserError("Permission Denied: You don't have enough privileges to manage users in Firestore.");
+      } else {
+        setUserError(err.message || "Failed to save user");
+      }
+    } finally {
+      setIsProcessingUser(false);
+    }
   };
 
-  const handleCheckIn = (goalId: string) => {
+  const handleDeleteUser = async (userId: string) => {
+    if (!window.confirm("Are you sure you want to delete this user? This action cannot be undone.")) return;
+
+    try {
+      await deleteDoc(doc(db, 'users', userId));
+      await deleteDoc(doc(db, 'public_users', userId));
+      // Note: Firebase Auth user deletion usually requires Admin SDK or the user to be logged in.
+      // In this client-side setup, we just remove the Firestore profile.
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `users/${userId}`);
+    }
+  };
+
+  const openAddUser = () => {
+    const randomId = Math.floor(1000 + Math.random() * 9000);
+    setUserForm({
+      name: '',
+      email: '',
+      role: 'intern',
+      codeId: `SOM-${randomId}`,
+      password: 'Password123',
+      institution: '',
+      nim: '',
+      semester: '',
+      major: '',
+      department: ''
+    });
+    setEditingUser(null);
+    setUserError(null);
+    setShowUserModal(true);
+  };
+
+  const openEditUser = (u: User) => {
+    setEditingUser(u);
+    setUserForm({
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      codeId: u.codeId || '',
+      password: u.password || 'Password123',
+      institution: u.institution || '',
+      nim: u.nim || '',
+      semester: u.semester || '',
+      major: u.major || '',
+      department: u.department || ''
+    });
+    setShowUserModal(true);
+  };
+
+  const handleDeleteGoal = async (goalId: string) => {
+    try {
+      await deleteDoc(doc(db, 'goals', goalId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `goals/${goalId}`);
+    }
+  };
+
+  const handleToggleStep = async (goalId: string, stepId: string) => {
     const goal = goals.find(g => g.id === goalId);
     if (!goal) return;
 
-    setGoals(prev => prev.map(g => {
-      if (g.id === goalId) {
-        const nextProgress = Math.min(g.progress + 10, 100);
-        return { ...g, progress: nextProgress };
+    const updatedSteps = goal.steps.map(s => 
+      s.id === stepId ? { ...s, completed: !s.completed } : s
+    );
+    const completedCount = updatedSteps.filter(s => s.completed).length;
+    const nextProgress = Math.round((completedCount / updatedSteps.length) * 100);
+    const isNowCompleted = nextProgress === 100;
+    const completedAt = isNowCompleted ? new Date().toISOString() : null;
+
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        steps: updatedSteps,
+        progress: nextProgress,
+        completedAt: completedAt
+      });
+
+      // Send notification to supervisor if goal just completed
+      if (isNowCompleted && goal.progress < 100 && goal.supervisorId) {
+        const notificationId = Math.random().toString(36).substr(2, 9);
+        await addDoc(collection(db, 'notifications'), {
+          id: notificationId,
+          userId: goal.supervisorId,
+          senderId: user.id,
+          title: 'Goal Completed',
+          message: `${user.name} has completed the goal: "${goal.title}"`,
+          type: 'info',
+          date: new Date().toISOString(),
+          read: false
+        });
       }
-      return g;
-    }));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `goals/${goalId}`);
+    }
+  };
+
+  const handleCheckIn = async (goalId: string) => {
+    const goal = goals.find(g => g.id === goalId);
+    if (!goal) return;
+
+    const nextProgress = Math.min(goal.progress + 10, 100);
+    const isNowCompleted = nextProgress === 100;
+    const completedAt = isNowCompleted ? new Date().toISOString() : (goal.completedAt || null);
+
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        progress: nextProgress,
+        completedAt: completedAt
+      });
+
+      // Send notification to supervisor if goal just completed
+      if (isNowCompleted && goal.progress < 100 && goal.supervisorId) {
+        const notificationId = Math.random().toString(36).substr(2, 9);
+        await addDoc(collection(db, 'notifications'), {
+          id: notificationId,
+          userId: goal.supervisorId,
+          senderId: user.id,
+          title: 'Goal Completed',
+          message: `${user.name} has completed the goal: "${goal.title}"`,
+          type: 'info',
+          date: new Date().toISOString(),
+          read: false
+        });
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `goals/${goalId}`);
+    }
 
     setCheckInLog(prev => [
       { 
@@ -304,19 +622,26 @@ export default function Dashboard({
     ]);
   };
 
-  const handleGiveEvaluation = (e: React.FormEvent) => {
+  const handleGiveEvaluation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedInternForEval || evalScore === 0 || !evalFeedback.trim()) return;
 
-    const newEval: Evaluation = {
-      id: Math.random().toString(36).substr(2, 9),
+    const evalId = Math.random().toString(36).substr(2, 9);
+    const newEval = {
+      id: evalId,
       internId: selectedInternForEval,
+      supervisorId: user.id,
       score: evalScore,
       feedback: evalFeedback,
       date: new Date().toISOString().split('T')[0]
     };
 
-    setEvaluations(prev => [newEval, ...prev]);
+    try {
+      await addDoc(collection(db, 'evaluations'), newEval);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'evaluations');
+    }
+
     setShowEvalSuccess(true);
     setTimeout(() => setShowEvalSuccess(false), 3000);
     setSelectedInternForEval(null);
@@ -324,27 +649,56 @@ export default function Dashboard({
     setEvalFeedback('');
   };
 
-  const handleUpdateSchedule = (e: React.FormEvent) => {
+  const handleUpdateSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSchedule({
-      ...schedule,
-      startTime: tempStartTime,
-      endTime: tempEndTime
-    });
-    setEditingSchedule(false);
+    try {
+      await setDoc(doc(db, 'settings', 'schedule'), {
+        startTime: tempStartTime,
+        endTime: tempEndTime
+      });
+      setEditingSchedule(false);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'settings/schedule');
+    }
   };
 
-  const markNotificationAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUpdatingProfile(true);
+    try {
+      await updateDoc(doc(db, 'users', user.id), {
+        ...profileForm
+      });
+      setProfileSuccess(true);
+      setTimeout(() => setProfileSuccess(false), 3000);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  const handleMarkNotificationAsRead = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'notifications', id), {
+        read: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `notifications/${id}`);
+    }
   };
 
   const supervisors = mockUsers.filter(u => u.role === 'supervisor');
   const interns = mockUsers.filter(u => u.role === 'intern');
 
-  const handleReaction = (evalId: string, reaction: string) => {
-    setEvaluations(prev => prev.map(ev => 
-      ev.id === evalId ? { ...ev, reaction } : ev
-    ));
+  const handleReaction = async (evalId: string, reaction: string) => {
+    try {
+      await updateDoc(doc(db, 'evaluations', evalId), {
+        reaction
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `evaluations/${evalId}`);
+    }
   };
 
   const averageProgress = Math.round(goals.reduce((acc, g) => acc + g.progress, 0) / goals.length);
@@ -421,7 +775,7 @@ export default function Dashboard({
                                       <button 
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          markNotificationAsRead(notification.id);
+                                          handleMarkNotificationAsRead(notification.id);
                                         }}
                                         className="text-[8px] uppercase tracking-widest font-bold text-som-olive hover:underline"
                                       >
@@ -447,6 +801,14 @@ export default function Dashboard({
             </div>
             <div className="h-8 w-px bg-som-ink/10 mx-2" />
             <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full overflow-hidden border border-som-ink/10">
+                <img 
+                  src={user.photoURL || `https://picsum.photos/seed/${user.id}/100/100`} 
+                  alt={user.name}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
               <div className="text-right hidden sm:block">
                 <p className="text-sm font-medium leading-none">{user.name}</p>
                 <p className={`text-[10px] uppercase tracking-widest font-bold mt-1 ${getRoleColor(user.role)}`}>
@@ -466,7 +828,36 @@ export default function Dashboard({
 
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-12">
-        <header className="mb-12">
+        <div className="flex items-center space-x-8 mb-12 border-b border-som-ink/5 pb-4">
+          <button 
+            onClick={() => setActiveTab('dashboard')}
+            className={cn(
+              "text-[10px] uppercase tracking-[0.3em] font-bold transition-all relative py-2",
+              activeTab === 'dashboard' ? "text-som-ink" : "text-som-ink/30 hover:text-som-ink/60"
+            )}
+          >
+            Dashboard
+            {activeTab === 'dashboard' && (
+              <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-som-olive" />
+            )}
+          </button>
+          <button 
+            onClick={() => setActiveTab('profile')}
+            className={cn(
+              "text-[10px] uppercase tracking-[0.3em] font-bold transition-all relative py-2",
+              activeTab === 'profile' ? "text-som-ink" : "text-som-ink/30 hover:text-som-ink/60"
+            )}
+          >
+            Profile
+            {activeTab === 'profile' && (
+              <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-som-olive" />
+            )}
+          </button>
+        </div>
+
+        {activeTab === 'dashboard' ? (
+          <>
+            <header className="mb-12">
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -490,232 +881,396 @@ export default function Dashboard({
 
         {/* Admin Specific Features */}
         {user.role === 'admin' && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1, duration: 0.6 }}
-            className="mb-12 grid grid-cols-1 lg:grid-cols-3 gap-8"
-          >
-            {/* User Management */}
-            <div className="lg:col-span-2 bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm">
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center space-x-3">
-                  <div className="p-2 rounded-xl bg-som-olive/10 text-som-olive">
-                    <Users className="w-5 h-5" />
+          <div className="space-y-12">
+            {/* Stats Grid */}
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1, duration: 0.6 }}
+              className="grid grid-cols-1 md:grid-cols-3 gap-8"
+            >
+              <div className="bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm hover:shadow-md transition-shadow group">
+                <div className="flex justify-between items-start mb-8">
+                  <div className="p-3 rounded-2xl bg-som-bg group-hover:bg-som-olive/10 transition-colors">
+                    <Settings className="w-6 h-6 text-som-olive" />
                   </div>
-                  <h3 className="serif text-2xl">Manage Users</h3>
+                  <span className="text-xs font-mono text-som-ink/30">01</span>
                 </div>
-                <button className="flex items-center space-x-2 text-[10px] uppercase tracking-widest font-bold bg-som-ink text-white px-4 py-2 rounded-full hover:bg-som-olive transition-colors">
-                  <UserPlus className="w-3 h-3" />
-                  <span>Add User</span>
-                </button>
+                <h3 className="serif text-2xl mb-2">System Health</h3>
+                <p className="text-sm text-som-ink/50 font-light mb-6">All systems are operational and running at peak performance.</p>
+                <div className="h-1 w-full bg-som-bg rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: '94%' }}
+                    transition={{ duration: 1.5, delay: 0.5 }}
+                    className="h-full bg-som-olive"
+                  />
+                </div>
+                <div className="flex justify-between mt-2">
+                  <span className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Efficiency</span>
+                  <span className="text-[10px] font-mono text-som-olive">94%</span>
+                </div>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-som-ink/5 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">
-                      <th className="pb-4 font-bold">User</th>
-                      <th className="pb-4 font-bold">Role</th>
-                      <th className="pb-4 font-bold">Supervisor</th>
-                      <th className="pb-4 font-bold text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-som-ink/5">
-                    {mockUsers.map((u) => (
-                      <tr key={u.id} className="group">
-                        <td className="py-4">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold uppercase">
-                              {u.name.split(' ').map(n => n[0]).join('')}
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium">{u.name}</p>
-                              <p className="text-[10px] text-som-ink/40">{u.email}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-4">
-                          <span className={cn(
-                            "text-[10px] uppercase tracking-widest font-bold",
-                            getRoleColor(u.role)
-                          )}>
-                            {u.role}
-                          </span>
-                        </td>
-                        <td className="py-4">
-                          <p className="text-xs text-som-ink/60 italic font-serif">
-                            {u.supervisorId 
-                              ? mockUsers.find(s => s.id === u.supervisorId)?.name 
-                              : u.role === 'intern' ? 'Unassigned' : 'N/A'}
-                          </p>
-                        </td>
-                        <td className="py-4 text-right">
-                          <div className="flex items-center justify-end space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button className="p-1.5 hover:bg-som-bg rounded-lg text-som-ink/40 hover:text-som-ink transition-colors">
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button className="p-1.5 hover:bg-red-50 rounded-lg text-som-ink/40 hover:text-red-500 transition-colors">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Assign Supervisor to Intern */}
-            <div className="bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm flex flex-col">
-              <div className="flex items-center space-x-3 mb-8">
-                <div className="p-2 rounded-xl bg-som-clay/10 text-som-clay">
-                  <LinkIcon className="w-5 h-5" />
+              <div className="bg-som-olive text-white p-8 rounded-[2rem] shadow-xl shadow-som-olive/20 group">
+                <div className="flex justify-between items-start mb-8">
+                  <div className="p-3 rounded-2xl bg-white/10 group-hover:bg-white/20 transition-colors">
+                    <Activity className="w-6 h-6" />
+                  </div>
+                  <span className="text-xs font-mono text-white/30">02</span>
                 </div>
-                <h3 className="serif text-2xl">Assign Mentorship</h3>
+                <h3 className="serif text-2xl mb-2 text-white">Platform Stats</h3>
+                <div className="space-y-4">
+                  <div className="flex justify-between items-end border-b border-white/10 pb-2">
+                    <span className="text-[10px] uppercase tracking-widest font-bold opacity-50">Total Interns</span>
+                    <span className="text-2xl serif">{mockUsers.filter(u => u.role === 'intern').length}</span>
+                  </div>
+                  <div className="flex justify-between items-end border-b border-white/10 pb-2">
+                    <span className="text-[10px] uppercase tracking-widest font-bold opacity-50">Total Supervisors</span>
+                    <span className="text-2xl serif">{mockUsers.filter(u => u.role === 'supervisor').length}</span>
+                  </div>
+                </div>
               </div>
 
-              <form onSubmit={handleAssign} className="space-y-6 flex-1">
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Select Supervisor</label>
-                  <select 
-                    value={selectedSupervisor}
-                    onChange={(e) => setSelectedSupervisor(e.target.value)}
-                    className="w-full bg-som-bg border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none cursor-pointer"
-                    required
-                  >
-                    <option value="">Choose a supervisor...</option>
-                    {supervisors.map(s => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
+              <div className="bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm flex flex-col">
+                <div className="flex items-center space-x-3 mb-8">
+                  <div className="p-2 rounded-xl bg-som-clay/10 text-som-clay">
+                    <LinkIcon className="w-5 h-5" />
+                  </div>
+                  <h3 className="serif text-2xl">Assign Mentorship</h3>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Select Intern</label>
-                  <select 
-                    value={selectedIntern}
-                    onChange={(e) => setSelectedIntern(e.target.value)}
-                    className="w-full bg-som-bg border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none cursor-pointer"
-                    required
-                  >
-                    <option value="">Choose an intern...</option>
-                    {interns.map(i => (
-                      <option key={i.id} value={i.id}>{i.name}</option>
-                    ))}
-                  </select>
-                </div>
+                <form onSubmit={handleAssign} className="space-y-6 flex-1">
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Select Supervisor</label>
+                    <select 
+                      value={selectedSupervisor}
+                      onChange={(e) => setSelectedSupervisor(e.target.value)}
+                      className="w-full bg-som-bg border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none cursor-pointer"
+                      required
+                    >
+                      <option value="">Choose a supervisor...</option>
+                      {supervisors.map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div className="pt-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Select Intern</label>
+                    <select 
+                      value={selectedIntern}
+                      onChange={(e) => setSelectedIntern(e.target.value)}
+                      className="w-full bg-som-bg border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none cursor-pointer"
+                      required
+                    >
+                      <option value="">Choose an intern...</option>
+                      {interns.map(i => (
+                        <option key={i.id} value={i.id}>{i.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="pt-4">
+                    <button 
+                      type="submit"
+                      className="w-full py-4 rounded-full bg-som-olive text-white font-medium text-xs uppercase tracking-widest hover:bg-som-ink transition-all duration-500 shadow-lg shadow-som-olive/20"
+                    >
+                      Confirm Assignment
+                    </button>
+                  </div>
+
+                  <AnimatePresence>
+                    {showAssignSuccess && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="flex items-center justify-center space-x-2 text-som-olive text-[10px] font-bold uppercase tracking-widest"
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>Assignment Successful</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </form>
+              </div>
+            </motion.div>
+
+            {/* Management Grid */}
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2, duration: 0.6 }}
+              className="grid grid-cols-1 lg:grid-cols-3 gap-8"
+            >
+              {/* User Management */}
+              <div className="lg:col-span-2 bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm">
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-som-olive/10 text-som-olive">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <h3 className="serif text-2xl">Manage Users</h3>
+                  </div>
                   <button 
-                    type="submit"
-                    className="w-full py-4 rounded-full bg-som-olive text-white font-medium text-xs uppercase tracking-widest hover:bg-som-ink transition-all duration-500 shadow-lg shadow-som-olive/20"
+                    type="button"
+                    onClick={() => {
+                      console.log("Add User clicked");
+                      openAddUser();
+                    }}
+                    className="flex items-center space-x-2 text-[10px] uppercase tracking-widest font-bold bg-som-ink text-white px-4 py-2 rounded-full hover:bg-som-olive transition-all duration-300 shadow-lg shadow-som-ink/20 active:scale-95"
                   >
-                    Confirm Assignment
+                    <UserPlus className="w-3 h-3" />
+                    <span>Add User</span>
                   </button>
                 </div>
 
                 <AnimatePresence>
-                  {showAssignSuccess && (
+                  {showUserSuccess && (
                     <motion.div 
-                      initial={{ opacity: 0, y: 10 }}
+                      initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="flex items-center justify-center space-x-2 text-som-olive text-[10px] font-bold uppercase tracking-widest"
+                      exit={{ opacity: 0, y: -10 }}
+                      className="mb-6 p-4 rounded-2xl bg-som-olive/10 border border-som-olive/20 flex items-center space-x-3"
                     >
-                      <Check className="w-3 h-3" />
-                      <span>Assignment Successful</span>
+                      <div className="p-1 rounded-full bg-som-olive text-white">
+                        <Check className="w-3 h-3" />
+                      </div>
+                      <span className="text-[10px] uppercase tracking-widest font-bold text-som-olive">User Operation Successful</span>
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </form>
 
-              <div className="mt-8 p-4 rounded-2xl bg-som-bg/50 border border-som-ink/5">
-                <p className="text-[10px] text-som-ink/40 leading-relaxed italic">
-                  Assigning a supervisor grants them access to view the intern's progress reports and daily logs.
-                </p>
-              </div>
-            </div>
-
-            {/* Schedule Management */}
-            <div className="bg-som-ink text-white p-8 rounded-[2rem] border border-som-ink/5 shadow-xl shadow-som-ink/20 flex flex-col">
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center space-x-3">
-                  <div className="p-2 rounded-xl bg-white/10 text-som-olive">
-                    <Clock className="w-5 h-5" />
-                  </div>
-                  <h3 className="serif text-2xl">Working Hours</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-som-ink/5 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">
+                        <th className="pb-4 font-bold">User</th>
+                        <th className="pb-4 font-bold">Role</th>
+                        <th className="pb-4 font-bold">Code ID</th>
+                        <th className="pb-4 font-bold">Password</th>
+                        <th className="pb-4 font-bold">Supervisor</th>
+                        <th className="pb-4 font-bold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-som-ink/5">
+                      {mockUsers.map((u) => (
+                        <tr key={u.id} className="group">
+                          <td className="py-4">
+                            <div className="flex items-center space-x-3">
+                              <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold uppercase">
+                                {u.name.split(' ').map(n => n[0]).join('')}
+                              </div>
+                              <div>
+                                <p className="text-sm font-medium">{u.name}</p>
+                                <p className="text-[10px] text-som-ink/40">{u.email}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-4">
+                            <span className={cn(
+                              "text-[10px] uppercase tracking-widest font-bold",
+                              getRoleColor(u.role)
+                            )}>
+                              {u.role}
+                            </span>
+                          </td>
+                          <td className="py-4 font-mono text-[10px] text-som-ink/60">
+                            {u.codeId || '--'}
+                          </td>
+                          <td className="py-4 font-mono text-[10px] text-som-ink/60">
+                            {u.password || '--'}
+                          </td>
+                          <td className="py-4">
+                            <p className="text-xs text-som-ink/60 italic font-serif">
+                              {u.supervisorId 
+                                ? mockUsers.find(s => s.id === u.supervisorId)?.name 
+                                : u.role === 'intern' ? 'Unassigned' : 'N/A'}
+                            </p>
+                          </td>
+                          <td className="py-4 text-right">
+                            <div className="flex items-center justify-end space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button 
+                                onClick={() => openEditUser(u as User)}
+                                className="p-1.5 hover:bg-som-bg rounded-lg text-som-ink/40 hover:text-som-ink transition-colors"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteUser(u.id)}
+                                className="p-1.5 hover:bg-red-50 rounded-lg text-som-ink/40 hover:text-red-500 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                {!editingSchedule && (
-                  <button 
-                    onClick={() => setEditingSchedule(true)}
-                    className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
+              </div>
+
+              {/* Mentorship Monitoring */}
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3, duration: 0.6 }}
+                className="lg:col-span-3 bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm"
+              >
+                <div className="flex items-center space-x-3 mb-8">
+                  <div className="p-2 rounded-xl bg-som-olive/10 text-som-olive">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <h3 className="serif text-2xl">Mentorship Monitoring</h3>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-som-ink/5 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">
+                        <th className="pb-4 font-bold">Supervisor</th>
+                        <th className="pb-4 font-bold">Intern Assigned</th>
+                        <th className="pb-4 font-bold">Assignment Date</th>
+                        <th className="pb-4 font-bold">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-som-ink/5">
+                      {mockUsers.filter(u => u.role === 'supervisor').map(supervisor => {
+                        const assignedInterns = mockUsers.filter(u => u.supervisorId === supervisor.id);
+                        
+                        if (assignedInterns.length === 0) {
+                          return (
+                            <tr key={supervisor.id}>
+                              <td className="py-4">
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold uppercase">
+                                    {supervisor.name.split(' ').map(n => n[0]).join('')}
+                                  </div>
+                                  <span className="text-sm font-medium">{supervisor.name}</span>
+                                </div>
+                              </td>
+                              <td className="py-4 text-xs text-som-ink/30 italic" colSpan={3}>No interns assigned</td>
+                            </tr>
+                          );
+                        }
+
+                        return assignedInterns.map((intern, index) => (
+                          <tr key={`${supervisor.id}-${intern.id}`} className="group">
+                            {index === 0 ? (
+                              <td className="py-4 align-top" rowSpan={assignedInterns.length}>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold uppercase">
+                                    {supervisor.name.split(' ').map(n => n[0]).join('')}
+                                  </div>
+                                  <span className="text-sm font-medium">{supervisor.name}</span>
+                                </div>
+                              </td>
+                            ) : null}
+                            <td className="py-4">
+                              <div className="flex items-center space-x-3">
+                                <div className="w-6 h-6 rounded-full bg-som-bg flex items-center justify-center text-[8px] font-bold uppercase">
+                                  {intern.name.split(' ').map(n => n[0]).join('')}
+                                </div>
+                                <span className="text-sm text-som-ink/70">{intern.name}</span>
+                              </div>
+                            </td>
+                            <td className="py-4 text-xs font-mono text-som-ink/60">
+                              {intern.assignedAt || 'Legacy Assignment'}
+                            </td>
+                            <td className="py-4">
+                              <span className="text-[9px] uppercase tracking-widest font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded">
+                                Active
+                              </span>
+                            </td>
+                          </tr>
+                        ));
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+
+              {/* Working Hours */}
+              <div className="bg-som-ink text-white p-8 rounded-[2rem] border border-som-ink/5 shadow-xl shadow-som-ink/20 flex flex-col">
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-white/10 text-som-olive">
+                      <Clock className="w-5 h-5" />
+                    </div>
+                    <h3 className="serif text-2xl">Working Hours</h3>
+                  </div>
+                  {!editingSchedule && (
+                    <button 
+                      onClick={() => setEditingSchedule(true)}
+                      className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {editingSchedule ? (
+                  <form onSubmit={handleUpdateSchedule} className="space-y-6 flex-1">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-white/40">Start Time</label>
+                      <input 
+                        type="time"
+                        value={tempStartTime}
+                        onChange={(e) => setTempStartTime(e.target.value)}
+                        className="w-full bg-white/10 border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all text-white"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-white/40">End Time</label>
+                      <input 
+                        type="time"
+                        value={tempEndTime}
+                        onChange={(e) => setTempEndTime(e.target.value)}
+                        className="w-full bg-white/10 border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all text-white"
+                        required
+                      />
+                    </div>
+                    <div className="flex space-x-3 pt-4">
+                      <button 
+                        type="button"
+                        onClick={() => setEditingSchedule(false)}
+                        className="flex-1 py-3 rounded-full border border-white/20 text-white font-medium text-[10px] uppercase tracking-widest hover:bg-white/5 transition-all"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        type="submit"
+                        className="flex-1 py-3 rounded-full bg-som-olive text-white font-medium text-[10px] uppercase tracking-widest hover:bg-som-bg hover:text-som-olive transition-all shadow-lg shadow-som-olive/20"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="space-y-8 flex-1 flex flex-col justify-center">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-6 rounded-3xl bg-white/5 border border-white/10 text-center">
+                        <p className="text-[10px] uppercase tracking-widest font-bold text-white/30 mb-2">Starts At</p>
+                        <p className="text-3xl serif italic">{schedule.startTime}</p>
+                      </div>
+                      <div className="p-6 rounded-3xl bg-white/5 border border-white/10 text-center">
+                        <p className="text-[10px] uppercase tracking-widest font-bold text-white/30 mb-2">Ends At</p>
+                        <p className="text-3xl serif italic">{schedule.endTime}</p>
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-2xl bg-som-olive/10 border border-som-olive/20">
+                      <p className="text-[10px] text-som-olive leading-relaxed italic text-center">
+                        Interns checking in after {schedule.startTime} will be automatically marked as "Late".
+                      </p>
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {editingSchedule ? (
-                <form onSubmit={handleUpdateSchedule} className="space-y-6 flex-1">
-                  <div className="space-y-2">
-                    <label className="text-[10px] uppercase tracking-widest font-bold text-white/40">Start Time</label>
-                    <input 
-                      type="time"
-                      value={tempStartTime}
-                      onChange={(e) => setTempStartTime(e.target.value)}
-                      className="w-full bg-white/10 border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all text-white"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] uppercase tracking-widest font-bold text-white/40">End Time</label>
-                    <input 
-                      type="time"
-                      value={tempEndTime}
-                      onChange={(e) => setTempEndTime(e.target.value)}
-                      className="w-full bg-white/10 border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all text-white"
-                      required
-                    />
-                  </div>
-                  <div className="flex space-x-3 pt-4">
-                    <button 
-                      type="button"
-                      onClick={() => setEditingSchedule(false)}
-                      className="flex-1 py-3 rounded-full border border-white/20 text-white font-medium text-[10px] uppercase tracking-widest hover:bg-white/5 transition-all"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 py-3 rounded-full bg-som-olive text-white font-medium text-[10px] uppercase tracking-widest hover:bg-som-bg hover:text-som-olive transition-all shadow-lg shadow-som-olive/20"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <div className="space-y-8 flex-1 flex flex-col justify-center">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-6 rounded-3xl bg-white/5 border border-white/10 text-center">
-                      <p className="text-[10px] uppercase tracking-widest font-bold text-white/30 mb-2">Starts At</p>
-                      <p className="text-3xl serif italic">{schedule.startTime}</p>
-                    </div>
-                    <div className="p-6 rounded-3xl bg-white/5 border border-white/10 text-center">
-                      <p className="text-[10px] uppercase tracking-widest font-bold text-white/30 mb-2">Ends At</p>
-                      <p className="text-3xl serif italic">{schedule.endTime}</p>
-                    </div>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-som-olive/10 border border-som-olive/20">
-                    <p className="text-[10px] text-som-olive leading-relaxed italic text-center">
-                      Interns checking in after {schedule.startTime} will be automatically marked as "Late".
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </motion.div>
+            </motion.div>
+          </div>
         )}
 
         {/* Intern Specific Features */}
@@ -735,104 +1290,207 @@ export default function Dashboard({
                   </div>
                   <h3 className="serif text-2xl">Personal Goals</h3>
                 </div>
+                <div className="flex items-center space-x-4">
+                  <div className="text-right">
+                    <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30">Total Goals</p>
+                    <p className="text-xl serif">{goals.filter(g => g.userId === user.id).length}</p>
+                  </div>
+                  <div className="w-px h-8 bg-som-ink/5" />
+                  <div className="text-right">
+                    <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30">Avg. Progress</p>
+                    <p className="text-xl serif text-som-olive">
+                      {goals.filter(g => g.userId === user.id).length > 0 
+                        ? Math.round(goals.filter(g => g.userId === user.id).reduce((acc, g) => acc + g.progress, 0) / goals.filter(g => g.userId === user.id).length)
+                        : 0}%
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* Create Goal Form */}
-              <form onSubmit={handleAddGoal} className="mb-10 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                <div className="md:col-span-7 space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">New Target</label>
-                  <input 
-                    type="text"
-                    value={newGoalTitle}
-                    onChange={(e) => setNewGoalTitle(e.target.value)}
-                    placeholder="e.g. Learn Advanced CSS Grid"
-                    className="w-full bg-som-bg border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all"
-                    required
-                  />
-                </div>
-                <div className="md:col-span-3 space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Category</label>
-                  <select 
-                    value={newGoalCategory}
-                    onChange={(e) => setNewGoalCategory(e.target.value)}
-                    className="w-full bg-som-bg border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none cursor-pointer"
-                  >
-                    <option value="Technical">Technical</option>
-                    <option value="Project">Project</option>
-                    <option value="Soft Skills">Soft Skills</option>
-                    <option value="Administrative">Administrative</option>
-                  </select>
-                </div>
-                <div className="md:col-span-2">
-                  <button 
-                    type="submit"
-                    className="w-full p-3.5 rounded-xl bg-som-ink text-white hover:bg-som-olive transition-colors flex items-center justify-center"
-                  >
-                    <Plus className="w-5 h-5" />
-                  </button>
-                </div>
-              </form>
+              <div className="mb-12 p-8 rounded-[2rem] bg-som-bg/20 border border-som-ink/5">
+                <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold text-som-ink/40 mb-6">Set New Work Target</h4>
+                <form onSubmit={handleAddGoal} className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Target Title</label>
+                      <input 
+                        type="text"
+                        value={newGoalTitle}
+                        onChange={(e) => setNewGoalTitle(e.target.value)}
+                        placeholder="e.g. Master React Fundamentals"
+                        className="w-full bg-white border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Category</label>
+                      <select 
+                        value={newGoalCategory}
+                        onChange={(e) => setNewGoalCategory(e.target.value)}
+                        className="w-full bg-white border-none rounded-xl py-3 px-4 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none cursor-pointer"
+                      >
+                        <option value="Technical">Technical</option>
+                        <option value="Research">Research</option>
+                        <option value="Development">Development</option>
+                        <option value="Documentation">Documentation</option>
+                        <option value="Presentation">Presentation</option>
+                        <option value="Administrative">Administrative</option>
+                        <option value="Soft Skills">Soft Skills</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Milestones / Steps</label>
+                      <button 
+                        type="button"
+                        onClick={handleAddStepInput}
+                        className="text-[9px] uppercase tracking-widest font-bold text-som-olive hover:text-som-ink transition-colors flex items-center space-x-1"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Add Step</span>
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {newGoalSteps.map((step, index) => (
+                        <div key={index} className="flex items-center space-x-2">
+                          <input 
+                            type="text"
+                            value={step}
+                            onChange={(e) => handleStepInputChange(index, e.target.value)}
+                            placeholder={`Step ${index + 1}`}
+                            className="flex-1 bg-white border-none rounded-xl py-2.5 px-4 text-xs focus:ring-1 focus:ring-som-olive transition-all"
+                            required
+                          />
+                          {newGoalSteps.length > 1 && (
+                            <button 
+                              type="button"
+                              onClick={() => handleRemoveStepInput(index)}
+                              className="p-2 text-som-ink/20 hover:text-red-500 transition-colors"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-4">
+                    <button 
+                      type="submit"
+                      className="w-full py-4 rounded-full bg-som-ink text-white font-medium text-[10px] uppercase tracking-widest hover:bg-som-olive transition-all duration-500 shadow-lg shadow-som-ink/10 flex items-center justify-center space-x-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Initialize Target</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
 
               {/* Goals List */}
               <div className="space-y-6">
                 {goals.filter(g => g.userId === user.id).length > 0 ? (
-                  goals.filter(g => g.userId === user.id).map((goal) => (
-                    <div key={goal.id} className="p-8 rounded-[2rem] bg-som-bg/30 border border-som-ink/5 group relative overflow-hidden">
-                      <div className="flex items-center justify-between mb-6">
-                        <div>
-                          <span className="text-[9px] uppercase tracking-widest font-bold text-som-olive bg-som-olive/10 px-2 py-0.5 rounded mb-2 inline-block">
-                            {goal.category}
-                          </span>
-                          <h4 className="text-xl serif">{goal.title}</h4>
+                  goals.filter(g => g.userId === user.id).map((goal) => {
+                    const completedSteps = goal.steps.filter(s => s.completed).length;
+                    const totalSteps = goal.steps.length;
+                    const status = goal.progress === 100 ? 'Completed' : goal.progress > 0 ? 'In Progress' : 'Not Started';
+                    const statusColor = status === 'Completed' ? 'text-green-600 bg-green-50' : status === 'In Progress' ? 'text-som-olive bg-som-olive/10' : 'text-som-ink/40 bg-som-ink/5';
+                    
+                    return (
+                      <div key={goal.id} className="p-8 rounded-[2rem] bg-white border border-som-ink/5 group relative overflow-hidden shadow-sm hover:shadow-md transition-all duration-500">
+                        <div className="flex items-start justify-between mb-6">
+                          <div className="space-y-1">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <span className="text-[9px] uppercase tracking-widest font-bold text-som-olive bg-som-olive/10 px-2 py-0.5 rounded">
+                                {goal.category}
+                              </span>
+                              <span className={cn("text-[9px] uppercase tracking-widest font-bold px-2 py-0.5 rounded", statusColor)}>
+                                {status}
+                              </span>
+                            </div>
+                            <h4 className="text-xl serif leading-tight">{goal.title}</h4>
+                            <div className="flex flex-col space-y-0.5 mt-1">
+                              <p className="text-[8px] text-som-ink/40">
+                                Dibuat: {goal.createdAt ? new Date(goal.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                              </p>
+                              {goal.completedAt && (
+                                <p className="text-[8px] text-som-olive font-medium">
+                                  Selesai: {new Date(goal.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-som-ink/40 italic mt-2">
+                              {completedSteps} of {totalSteps} milestones achieved
+                            </p>
+                          </div>
+                          <div className="flex flex-col items-end space-y-2">
+                            <button 
+                              onClick={() => handleDeleteGoal(goal.id)}
+                              className="p-2 text-som-ink/10 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                            <div className="text-right">
+                              <span className="text-2xl serif text-som-olive">{goal.progress}%</span>
+                              <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30">Completion</p>
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <span className="text-2xl serif text-som-olive">{goal.progress}%</span>
-                          <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30">Completion</p>
-                        </div>
-                      </div>
 
-                      <div className="space-y-6">
-                        <div className="h-1.5 w-full bg-som-ink/5 rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${goal.progress}%` }}
-                            className="h-full bg-som-olive"
-                          />
-                        </div>
+                        <div className="space-y-6">
+                          <div className="h-1.5 w-full bg-som-ink/5 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${goal.progress}%` }}
+                              className="h-full bg-som-olive"
+                            />
+                          </div>
 
-                        <div className="space-y-3">
-                          <p className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40 mb-2">Milestones</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {goal.steps.map(step => (
-                              <button 
-                                key={step.id}
-                                onClick={() => handleToggleStep(goal.id, step.id)}
-                                className={cn(
-                                  "flex items-center space-x-3 p-4 rounded-2xl border transition-all text-left group/step",
-                                  step.completed 
-                                    ? "bg-som-olive/5 border-som-olive/20 text-som-olive" 
-                                    : "bg-white border-som-ink/5 text-som-ink/60 hover:border-som-olive/30"
-                                )}
-                              >
-                                <div className={cn(
-                                  "w-5 h-5 rounded-full border flex items-center justify-center transition-all shrink-0",
-                                  step.completed ? "bg-som-olive border-som-olive text-white" : "border-som-ink/20 group-hover/step:border-som-olive/50"
-                                )}>
-                                  {step.completed && <Check className="w-3 h-3" />}
-                                </div>
-                                <span className={cn(
-                                  "text-xs font-light",
-                                  step.completed ? "line-through opacity-60" : ""
-                                )}>
-                                  {step.title}
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Milestones</p>
+                              {goal.progress === 100 && (
+                                <span className="text-[8px] uppercase tracking-widest font-bold text-green-600 flex items-center space-x-1">
+                                  <Check className="w-2 h-2" />
+                                  <span>Goal Completed</span>
                                 </span>
-                              </button>
-                            ))}
+                              )}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {goal.steps.map(step => (
+                                <button 
+                                  key={step.id}
+                                  onClick={() => handleToggleStep(goal.id, step.id)}
+                                  className={cn(
+                                    "flex items-center space-x-3 p-4 rounded-2xl border transition-all text-left group/step",
+                                    step.completed 
+                                      ? "bg-som-olive/5 border-som-olive/20 text-som-olive" 
+                                      : "bg-white border-som-ink/5 text-som-ink/60 hover:border-som-olive/30"
+                                  )}
+                                >
+                                  <div className={cn(
+                                    "w-5 h-5 rounded-full border flex items-center justify-center transition-all shrink-0",
+                                    step.completed ? "bg-som-olive border-som-olive text-white" : "border-som-ink/20 group-hover/step:border-som-olive/50"
+                                  )}>
+                                    {step.completed && <Check className="w-3 h-3" />}
+                                  </div>
+                                  <span className={cn(
+                                    "text-xs font-light",
+                                    step.completed ? "line-through opacity-60" : ""
+                                  )}>
+                                    {step.title}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="text-center py-12 bg-som-bg/20 rounded-[2rem] border border-dashed border-som-ink/10">
                     <p className="text-sm text-som-ink/30 italic serif">No goals set yet. Start by adding one above.</p>
@@ -1190,9 +1848,28 @@ export default function Dashboard({
                               <div className="space-y-6">
                                 {stats.internGoals.length > 0 ? (
                                   stats.internGoals.map(goal => (
-                                    <div key={goal.id} className="space-y-3">
-                                      <div className="flex justify-between items-center">
-                                        <span className="text-xs font-medium text-som-ink/80">{goal.title}</span>
+                                    <div key={goal.id} className="space-y-3 p-4 rounded-2xl bg-som-bg/30 border border-som-ink/5">
+                                      <div className="flex justify-between items-start">
+                                        <div className="space-y-1">
+                                          <div className="flex items-center space-x-2">
+                                            <span className="text-xs font-medium text-som-ink/80">{goal.title}</span>
+                                            {goal.progress === 100 && (
+                                              <span className="text-[8px] uppercase tracking-widest font-bold text-white bg-som-olive px-2 py-0.5 rounded-full">
+                                                Selesai
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="flex flex-col space-y-0.5">
+                                            <p className="text-[8px] text-som-ink/40">
+                                              Dibuat: {goal.createdAt ? new Date(goal.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                                            </p>
+                                            {goal.completedAt && (
+                                              <p className="text-[8px] text-som-olive font-medium">
+                                                Selesai: {new Date(goal.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
                                         <span className="text-[10px] font-serif italic text-som-olive">{goal.progress}%</span>
                                       </div>
                                       <div className="w-full h-1 bg-som-bg rounded-full overflow-hidden">
@@ -1381,316 +2058,9 @@ export default function Dashboard({
                 </AnimatePresence>
               </div>
             </div>
-
-            {/* Evaluation Modal */}
-            <AnimatePresence>
-              {selectedInternForEval && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-som-ink/60 backdrop-blur-md"
-                >
-                  <motion.div 
-                    initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                    animate={{ scale: 1, opacity: 1, y: 0 }}
-                    exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                    className="bg-white w-full max-w-xl rounded-[3rem] p-12 shadow-2xl relative overflow-hidden"
-                  >
-                    {/* Decorative element */}
-                    <div className="absolute top-0 left-0 w-full h-2 bg-som-olive" />
-                    
-                    <button 
-                      onClick={() => setSelectedInternForEval(null)}
-                      className="absolute top-10 right-10 text-som-ink/20 hover:text-som-ink transition-colors p-2 hover:bg-som-bg rounded-full"
-                    >
-                      <Plus className="w-6 h-6 rotate-45" />
-                    </button>
-
-                    <div className="mb-10">
-                      <div className="flex items-center space-x-3 mb-4">
-                        <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-som-olive">Performance Review</span>
-                        <div className="h-px w-12 bg-som-olive/20" />
-                      </div>
-                      <h3 className="serif text-4xl mb-3">Evaluate Intern</h3>
-                      <p className="text-sm text-som-ink/50 font-light">
-                        Providing feedback for <span className="font-medium text-som-ink italic">{mockUsers.find(u => u.id === selectedInternForEval)?.name}</span>
-                      </p>
-                    </div>
-
-                    <form onSubmit={handleGiveEvaluation} className="space-y-8">
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-center">
-                          <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Performance Score</label>
-                          <span className="text-2xl font-serif italic text-som-olive">{evalScore}<span className="text-xs text-som-ink/30 not-italic ml-1">/ 100</span></span>
-                        </div>
-                        <div className="relative pt-2">
-                          <input 
-                            type="range" 
-                            min="0" 
-                            max="100" 
-                            step="5"
-                            value={evalScore}
-                            onChange={(e) => setEvalScore(parseInt(e.target.value))}
-                            className="w-full h-1.5 bg-som-bg rounded-full appearance-none cursor-pointer accent-som-olive"
-                          />
-                          <div className="flex justify-between mt-2 text-[8px] font-mono text-som-ink/20 uppercase tracking-tighter">
-                            <span>Needs Improvement</span>
-                            <span>Exceptional</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Feedback & Observations</label>
-                        <textarea 
-                          value={evalFeedback}
-                          onChange={(e) => setEvalFeedback(e.target.value)}
-                          placeholder="What did they excel at? Where can they grow?"
-                          className="w-full bg-som-bg border-none rounded-[2rem] py-6 px-7 text-sm focus:ring-1 focus:ring-som-olive transition-all min-h-[160px] resize-none placeholder:text-som-ink/20"
-                          required
-                        />
-                      </div>
-
-                      <div className="pt-4">
-                        <button 
-                          type="submit"
-                          className="w-full py-5 rounded-full bg-som-ink text-white font-medium text-xs uppercase tracking-widest hover:bg-som-olive transition-all duration-500 shadow-xl shadow-som-ink/20 flex items-center justify-center space-x-3 group"
-                        >
-                          <span>Submit Evaluation</span>
-                          <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                        </button>
-                      </div>
-                    </form>
-                  </motion.div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Attendance History Modal */}
-            <AnimatePresence>
-              {selectedInternForAttendance && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-som-ink/60 backdrop-blur-md"
-                >
-                  <motion.div 
-                    initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                    animate={{ scale: 1, opacity: 1, y: 0 }}
-                    exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                    className="bg-white w-full max-w-2xl rounded-[3rem] p-12 shadow-2xl relative overflow-hidden"
-                  >
-                    {/* Decorative element */}
-                    <div className="absolute top-0 left-0 w-full h-2 bg-som-clay" />
-                    
-                    <button 
-                      onClick={() => setSelectedInternForAttendance(null)}
-                      className="absolute top-10 right-10 text-som-ink/20 hover:text-som-ink transition-colors p-2 hover:bg-som-bg rounded-full"
-                    >
-                      <Plus className="w-6 h-6 rotate-45" />
-                    </button>
-
-                    <div className="mb-10">
-                      <div className="flex items-center space-x-3 mb-4">
-                        <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-som-clay">Attendance Monitoring</span>
-                        <div className="h-px w-12 bg-som-clay/20" />
-                      </div>
-                      <h3 className="serif text-4xl mb-3">Attendance History</h3>
-                      <p className="text-sm text-som-ink/50 font-light">
-                        Reviewing records for <span className="font-medium text-som-ink italic">{mockUsers.find(u => u.id === selectedInternForAttendance)?.name}</span>
-                      </p>
-                    </div>
-
-                    <div className="max-h-[400px] overflow-y-auto pr-4 custom-scrollbar">
-                      <table className="w-full text-left">
-                        <thead>
-                          <tr className="border-b border-som-ink/5">
-                            <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Date</th>
-                            <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Check-in</th>
-                            <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Check-out</th>
-                            <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40 text-right">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-som-ink/5">
-                          {attendance
-                            .filter(a => a.userId === selectedInternForAttendance)
-                            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                            .map((record) => (
-                              <tr key={record.id} className="group hover:bg-som-bg/30 transition-colors">
-                                <td className="py-4 text-sm font-medium">{record.date}</td>
-                                <td className="py-4 text-sm text-som-ink/60 font-light">{record.checkIn}</td>
-                                <td className="py-4 text-sm text-som-ink/60 font-light">{record.checkOut || '--:--'}</td>
-                                <td className="py-4 text-right">
-                                  <span className={cn(
-                                    "text-[9px] uppercase tracking-widest font-bold px-2 py-0.5 rounded",
-                                    record.status === 'present' ? "bg-green-100 text-green-600" : "bg-yellow-100 text-yellow-600"
-                                  )}>
-                                    {record.status}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          {attendance.filter(a => a.userId === selectedInternForAttendance).length === 0 && (
-                            <tr>
-                              <td colSpan={4} className="py-12 text-center text-som-ink/30 italic serif">
-                                No attendance records found for this intern.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div className="mt-10 p-8 rounded-[2rem] bg-som-bg/50 border border-som-ink/5 flex items-center justify-between">
-                      <div className="flex items-center space-x-8">
-                        <div className="text-center">
-                          <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30 mb-1">Present</p>
-                          <p className="text-2xl serif text-green-600">
-                            {attendance.filter(a => a.userId === selectedInternForAttendance && a.status === 'present').length}
-                          </p>
-                        </div>
-                        <div className="w-px h-10 bg-som-ink/10" />
-                        <div className="text-center">
-                          <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30 mb-1">Late</p>
-                          <p className="text-2xl serif text-yellow-600">
-                            {attendance.filter(a => a.userId === selectedInternForAttendance && a.status === 'late').length}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30 mb-1">Attendance Rate</p>
-                        <p className="text-2xl serif">
-                          {Math.round((attendance.filter(a => a.userId === selectedInternForAttendance).length / 20) * 100)}%
-                        </p>
-                      </div>
-                    </div>
-                  </motion.div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </motion.div>
         )}
 
-        {/* Dashboard Grid (Admin Only) */}
-        {user.role === 'admin' && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {/* Stats/Cards */}
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2, duration: 0.6 }}
-              className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6"
-            >
-              <div className="bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm hover:shadow-md transition-shadow group">
-                <div className="flex justify-between items-start mb-8">
-                  <div className="p-3 rounded-2xl bg-som-bg group-hover:bg-som-olive/10 transition-colors">
-                    <Settings className="w-6 h-6 text-som-olive" />
-                  </div>
-                  <span className="text-xs font-mono text-som-ink/30">01</span>
-                </div>
-                <h3 className="serif text-2xl mb-2">System Health</h3>
-                <p className="text-sm text-som-ink/50 font-light mb-6">All systems are operational and running at peak performance.</p>
-                <div className="h-1 w-full bg-som-bg rounded-full overflow-hidden">
-                  <motion.div 
-                    initial={{ width: 0 }}
-                    animate={{ width: '94%' }}
-                    transition={{ duration: 1.5, delay: 0.5 }}
-                    className="h-full bg-som-olive"
-                  />
-                </div>
-                <div className="flex justify-between mt-2">
-                  <span className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Efficiency</span>
-                  <span className="text-[10px] font-mono text-som-olive">94%</span>
-                </div>
-              </div>
-
-              <div className="bg-som-olive text-white p-8 rounded-[2rem] shadow-xl shadow-som-olive/20 group">
-                <div className="flex justify-between items-start mb-8">
-                  <div className="p-3 rounded-2xl bg-white/10 group-hover:bg-white/20 transition-colors">
-                    <Activity className="w-6 h-6" />
-                  </div>
-                  <span className="text-xs font-mono text-white/30">02</span>
-                </div>
-                <h3 className="serif text-2xl mb-2 text-white">Platform Stats</h3>
-                <div className="space-y-4">
-                  <div className="flex justify-between items-end border-b border-white/10 pb-2">
-                    <span className="text-[10px] uppercase tracking-widest font-bold opacity-50">Total Interns</span>
-                    <span className="text-2xl serif">{mockUsers.filter(u => u.role === 'intern').length}</span>
-                  </div>
-                  <div className="flex justify-between items-end border-b border-white/10 pb-2">
-                    <span className="text-[10px] uppercase tracking-widest font-bold opacity-50">Total Supervisors</span>
-                    <span className="text-2xl serif">{mockUsers.filter(u => u.role === 'supervisor').length}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="sm:col-span-2 bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="serif text-2xl">Recent Activity</h3>
-                  <button className="text-[10px] uppercase tracking-widest font-bold text-som-olive">Download Report</button>
-                </div>
-                <div className="space-y-6">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="flex items-center justify-between py-4 border-b border-som-ink/5 last:border-0">
-                      <div className="flex items-center space-x-4">
-                        <div className="w-10 h-10 rounded-full bg-som-bg flex items-center justify-center text-xs serif italic">
-                          {i}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium">Project update published</p>
-                          <p className="text-xs text-som-ink/40 font-light">2 hours ago by Sarah M.</p>
-                        </div>
-                      </div>
-                      <span className="text-[10px] px-2 py-1 rounded bg-som-bg text-som-ink/60 font-bold uppercase tracking-tighter">
-                        Completed
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </motion.div>
-
-            {/* Sidebar Info */}
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.4, duration: 0.6 }}
-              className="space-y-8"
-            >
-              <div className="bg-white/50 backdrop-blur-sm p-8 rounded-[2rem] border border-som-ink/5">
-                <h4 className="text-[10px] uppercase tracking-[0.3em] font-bold text-som-ink/40 mb-6">Role Privileges</h4>
-                <ul className="space-y-4">
-                  {[
-                    { label: 'Access Level', value: 'Tier 2' },
-                    { label: 'Data Editing', value: 'Enabled' },
-                    { label: 'Team Management', value: 'None' },
-                    { label: 'System Logs', value: 'View Only' },
-                  ].map((item, i) => (
-                    <li key={i} className="flex justify-between items-center text-xs">
-                      <span className="font-light text-som-ink/50">{item.label}</span>
-                      <span className="font-medium">{item.value}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="relative aspect-[4/5] rounded-[2rem] overflow-hidden group">
-                <img 
-                  src="https://picsum.photos/seed/minimal/800/1000" 
-                  alt="Minimalist workspace" 
-                  className="object-cover w-full h-full transition-transform duration-1000 group-hover:scale-110"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-som-ink/80 via-transparent to-transparent flex flex-col justify-end p-8">
-                  <p className="text-white/60 text-[10px] uppercase tracking-widest font-bold mb-2">Inspiration</p>
-                  <h3 className="serif text-2xl text-white italic">"Simplicity is the ultimate sophistication."</h3>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
 
         {/* Sidebar Info for Interns (Moved here for layout consistency) */}
         {user.role === 'intern' && (
@@ -1699,6 +2069,537 @@ export default function Dashboard({
                Focus on the process, not just the outcome.
              </p>
           </div>
+        )}
+
+        {/* Global Modals */}
+        {/* User Management Modal */}
+        <AnimatePresence>
+          {showUserModal && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-som-ink/60 backdrop-blur-md"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-white w-full max-w-md rounded-[2.5rem] p-10 shadow-2xl relative overflow-hidden max-h-[90vh] flex flex-col"
+              >
+                <button 
+                  onClick={() => setShowUserModal(false)}
+                  className="absolute top-8 right-8 text-som-ink/20 hover:text-som-ink transition-colors p-2 hover:bg-som-bg rounded-full z-10"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                <div className="overflow-y-auto pr-2 custom-scrollbar">
+                  <div className="mb-8">
+                    <div className="flex items-center space-x-3 mb-3">
+                      <span className="text-[9px] uppercase tracking-[0.3em] font-bold text-som-olive">
+                        {editingUser ? 'Update Profile' : 'System Provisioning'}
+                      </span>
+                      <div className="h-px w-10 bg-som-olive/20" />
+                    </div>
+                    <h3 className="serif text-3xl mb-2">{editingUser ? 'Edit User' : 'Add New User'}</h3>
+                    <p className="text-xs text-som-ink/50 font-light">
+                      {editingUser ? 'Modify existing user credentials and roles.' : 'Create a new user with system-generated credentials.'}
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleSaveUser} className="space-y-5 pb-4">
+                    <div className="space-y-3">
+                      <div className="relative">
+                        <UserIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                        <input 
+                          type="text"
+                          value={userForm.name}
+                          onChange={(e) => setUserForm({...userForm, name: e.target.value})}
+                          placeholder="Full Name"
+                          className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                          required
+                        />
+                      </div>
+                      <div className="relative">
+                        <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                        <input 
+                          type="email"
+                          value={userForm.email}
+                          onChange={(e) => setUserForm({...userForm, email: e.target.value})}
+                          placeholder="Email Address"
+                          className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                          required
+                          disabled={!!editingUser}
+                        />
+                      </div>
+                      <div className="relative">
+                        <ShieldCheck className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                        <select 
+                          value={userForm.role}
+                          onChange={(e) => setUserForm({...userForm, role: e.target.value as Role})}
+                          className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all appearance-none"
+                          required
+                        >
+                          <option value="intern">Intern</option>
+                          <option value="supervisor">Supervisor</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      </div>
+
+                      {userForm.role === 'intern' && (
+                        <div className="space-y-3">
+                          <div className="relative">
+                            <Briefcase className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                            <input 
+                              type="text"
+                              value={userForm.institution}
+                              onChange={(e) => setUserForm({...userForm, institution: e.target.value})}
+                              placeholder="Asal Institusi / Nama Kampus"
+                              className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                              required
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="relative">
+                              <Hash className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                              <input 
+                                type="text"
+                                value={userForm.nim}
+                                onChange={(e) => setUserForm({...userForm, nim: e.target.value})}
+                                placeholder="NIM"
+                                className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                                required
+                              />
+                            </div>
+                            <div className="relative">
+                              <TrendingUp className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                              <input 
+                                type="text"
+                                value={userForm.semester}
+                                onChange={(e) => setUserForm({...userForm, semester: e.target.value})}
+                                placeholder="Semester"
+                                className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                                required
+                              />
+                            </div>
+                          </div>
+                          <div className="relative">
+                            <Target className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                            <input 
+                              type="text"
+                              value={userForm.major}
+                              onChange={(e) => setUserForm({...userForm, major: e.target.value})}
+                              placeholder="Jurusan"
+                              className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                              required
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {userForm.role === 'supervisor' && (
+                        <div className="relative">
+                          <Shield className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                          <input 
+                            type="text"
+                            value={userForm.department}
+                            onChange={(e) => setUserForm({...userForm, department: e.target.value})}
+                            placeholder="Departemen"
+                            className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {userForm.role !== 'admin' && (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="relative">
+                            <Hash className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                            <input 
+                              type="text"
+                              value={userForm.codeId}
+                              onChange={(e) => setUserForm({...userForm, codeId: e.target.value})}
+                              placeholder="Code ID"
+                              className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                              required
+                            />
+                          </div>
+                          <div className="relative">
+                            <KeyRound className="absolute left-5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-som-ink/30" />
+                            <input 
+                              type="text"
+                              value={userForm.password}
+                              onChange={(e) => setUserForm({...userForm, password: e.target.value})}
+                              placeholder="Password"
+                              className="w-full bg-som-bg border-none rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                              required
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {userError && (
+                      <p className="text-red-500 text-[10px] text-center font-light">{userError}</p>
+                    )}
+
+                    <div className="pt-2">
+                      <button 
+                        type="submit"
+                        disabled={isProcessingUser}
+                        className="w-full py-4 rounded-full bg-som-ink text-white font-medium text-[10px] uppercase tracking-widest hover:bg-som-olive transition-all duration-500 shadow-xl shadow-som-ink/20 flex items-center justify-center space-x-3 group"
+                      >
+                        {isProcessingUser ? (
+                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <>
+                            <span>{editingUser ? 'Save Changes' : 'Create User'}</span>
+                            <ArrowUpRight className="w-3 h-3 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Evaluation Modal */}
+        <AnimatePresence>
+          {selectedInternForEval && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-som-ink/60 backdrop-blur-md"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-white w-full max-w-xl rounded-[3rem] p-12 shadow-2xl relative overflow-hidden max-h-[90vh] flex flex-col"
+              >
+                {/* Decorative element */}
+                <div className="absolute top-0 left-0 w-full h-2 bg-som-olive" />
+                
+                <button 
+                  onClick={() => setSelectedInternForEval(null)}
+                  className="absolute top-10 right-10 text-som-ink/20 hover:text-som-ink transition-colors p-2 hover:bg-som-bg rounded-full z-10"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+
+                <div className="overflow-y-auto pr-2 custom-scrollbar">
+                  <div className="mb-10">
+                    <div className="flex items-center space-x-3 mb-4">
+                      <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-som-olive">Performance Review</span>
+                      <div className="h-px w-12 bg-som-olive/20" />
+                    </div>
+                    <h3 className="serif text-4xl mb-3">Evaluate Intern</h3>
+                    <p className="text-sm text-som-ink/50 font-light">
+                      Providing feedback for <span className="font-medium text-som-ink italic">{mockUsers.find(u => u.id === selectedInternForEval)?.name}</span>
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleGiveEvaluation} className="space-y-8 pb-4">
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Performance Score</label>
+                        <span className="text-2xl font-serif italic text-som-olive">{evalScore}<span className="text-xs text-som-ink/30 not-italic ml-1">/ 100</span></span>
+                      </div>
+                      <div className="relative pt-2">
+                        <input 
+                          type="range" 
+                          min="0" 
+                          max="100" 
+                          step="5"
+                          value={evalScore}
+                          onChange={(e) => setEvalScore(parseInt(e.target.value))}
+                          className="w-full h-1.5 bg-som-bg rounded-full appearance-none cursor-pointer accent-som-olive"
+                        />
+                        <div className="flex justify-between mt-2 text-[8px] font-mono text-som-ink/20 uppercase tracking-tighter">
+                          <span>Needs Improvement</span>
+                          <span>Exceptional</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Feedback & Observations</label>
+                      <textarea 
+                        value={evalFeedback}
+                        onChange={(e) => setEvalFeedback(e.target.value)}
+                        placeholder="What did they excel at? Where can they grow?"
+                        className="w-full bg-som-bg border-none rounded-[2rem] py-6 px-7 text-sm focus:ring-1 focus:ring-som-olive transition-all min-h-[160px] resize-none placeholder:text-som-ink/20"
+                        required
+                      />
+                    </div>
+
+                    <div className="pt-4">
+                      <button 
+                        type="submit"
+                        className="w-full py-5 rounded-full bg-som-ink text-white font-medium text-xs uppercase tracking-widest hover:bg-som-olive transition-all duration-500 shadow-xl shadow-som-ink/20 flex items-center justify-center space-x-3 group"
+                      >
+                        <span>Submit Evaluation</span>
+                        <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Attendance History Modal */}
+        <AnimatePresence>
+          {selectedInternForAttendance && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-som-ink/60 backdrop-blur-md"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-white w-full max-w-4xl rounded-[3rem] p-12 shadow-2xl relative overflow-hidden max-h-[90vh] flex flex-col"
+              >
+                {/* Decorative element */}
+                <div className="absolute top-0 left-0 w-full h-2 bg-som-clay" />
+                
+                <button 
+                  onClick={() => setSelectedInternForAttendance(null)}
+                  className="absolute top-10 right-10 text-som-ink/20 hover:text-som-ink transition-colors p-2 hover:bg-som-bg rounded-full z-10"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+
+                <div className="overflow-y-auto pr-2 custom-scrollbar">
+                  <div className="mb-10">
+                    <div className="flex items-center space-x-3 mb-4">
+                      <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-som-clay">Attendance Monitoring</span>
+                      <div className="h-px w-12 bg-som-clay/20" />
+                    </div>
+                    <h3 className="serif text-4xl mb-3">Attendance History</h3>
+                    <p className="text-sm text-som-ink/50 font-light">
+                      Reviewing records for <span className="font-medium text-som-ink italic">{mockUsers.find(u => u.id === selectedInternForAttendance)?.name}</span>
+                    </p>
+                  </div>
+
+                  <div className="max-h-[400px] overflow-y-auto pr-4 custom-scrollbar">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-som-ink/5">
+                          <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Date</th>
+                          <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Check-in</th>
+                          <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Check-out</th>
+                          <th className="py-4 text-[10px] uppercase tracking-widest font-bold text-som-ink/40 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-som-ink/5">
+                        {attendance
+                          .filter(a => a.userId === selectedInternForAttendance)
+                          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                          .map((record) => (
+                            <tr key={record.id} className="group hover:bg-som-bg/30 transition-colors">
+                              <td className="py-4 text-sm font-medium">{record.date}</td>
+                              <td className="py-4 text-sm text-som-ink/60 font-light">{record.checkIn}</td>
+                              <td className="py-4 text-sm text-som-ink/60 font-light">{record.checkOut || '--:--'}</td>
+                              <td className="py-4 text-right">
+                                <span className={cn(
+                                  "text-[9px] uppercase tracking-widest font-bold px-2 py-0.5 rounded",
+                                  record.status === 'present' ? "bg-green-100 text-green-600" : "bg-yellow-100 text-yellow-600"
+                                )}>
+                                  {record.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        {attendance.filter(a => a.userId === selectedInternForAttendance).length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="py-12 text-center text-som-ink/30 italic serif">
+                              No attendance records found for this intern.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-10 p-8 rounded-[2rem] bg-som-bg/50 border border-som-ink/5 flex items-center justify-between">
+                    <div className="flex items-center space-x-8">
+                      <div className="text-center">
+                        <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30 mb-1">Present</p>
+                        <p className="text-2xl serif text-green-600">
+                          {attendance.filter(a => a.userId === selectedInternForAttendance && a.status === 'present').length}
+                        </p>
+                      </div>
+                      <div className="w-px h-10 bg-som-ink/10" />
+                      <div className="text-center">
+                        <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30 mb-1">Late</p>
+                        <p className="text-2xl serif text-yellow-600">
+                          {attendance.filter(a => a.userId === selectedInternForAttendance && a.status === 'late').length}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30 mb-1">Attendance Rate</p>
+                      <p className="text-2xl serif">
+                        {Math.round((attendance.filter(a => a.userId === selectedInternForAttendance).length / 20) * 100)}%
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </>
+    ) : (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="max-w-4xl mx-auto"
+          >
+            <div className="bg-white p-12 rounded-[3rem] border border-som-ink/5 shadow-sm">
+              <div className="flex flex-col md:flex-row gap-12">
+                {/* Photo Section */}
+                <div className="flex flex-col items-center space-y-6">
+                  <div className="relative group">
+                    <div className="w-40 h-40 rounded-full overflow-hidden border-4 border-som-bg shadow-xl">
+                      <img 
+                        src={profileForm.photoURL} 
+                        alt="Profile" 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="absolute inset-0 bg-som-ink/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Camera className="text-white w-8 h-8" />
+                    </div>
+                  </div>
+                  <div className="space-y-2 w-full">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Photo URL</label>
+                    <input 
+                      type="text"
+                      value={profileForm.photoURL}
+                      onChange={(e) => setProfileForm(prev => ({ ...prev, photoURL: e.target.value }))}
+                      className="w-full bg-som-bg border-none rounded-xl px-4 py-2 text-xs focus:ring-1 focus:ring-som-olive transition-all"
+                      placeholder="https://..."
+                    />
+                  </div>
+                </div>
+
+                {/* Form Section */}
+                <form onSubmit={handleUpdateProfile} className="flex-1 space-y-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Full Name</label>
+                      <input 
+                        type="text"
+                        value={profileForm.name}
+                        onChange={(e) => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Email Address</label>
+                      <input 
+                        type="email"
+                        value={profileForm.email}
+                        disabled
+                        className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm opacity-50 cursor-not-allowed"
+                      />
+                    </div>
+
+                    {user.role === 'intern' && (
+                      <>
+                        <div className="space-y-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Institution / Campus</label>
+                          <input 
+                            type="text"
+                            value={profileForm.institution}
+                            onChange={(e) => setProfileForm(prev => ({ ...prev, institution: e.target.value }))}
+                            className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">NIM / Student ID</label>
+                          <input 
+                            type="text"
+                            value={profileForm.nim}
+                            onChange={(e) => setProfileForm(prev => ({ ...prev, nim: e.target.value }))}
+                            className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Major</label>
+                          <input 
+                            type="text"
+                            value={profileForm.major}
+                            onChange={(e) => setProfileForm(prev => ({ ...prev, major: e.target.value }))}
+                            className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Semester</label>
+                          <input 
+                            type="text"
+                            value={profileForm.semester}
+                            onChange={(e) => setProfileForm(prev => ({ ...prev, semester: e.target.value }))}
+                            className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {user.role === 'supervisor' && (
+                      <div className="space-y-2">
+                        <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Department</label>
+                        <input 
+                          type="text"
+                          value={profileForm.department}
+                          onChange={(e) => setProfileForm(prev => ({ ...prev, department: e.target.value }))}
+                          className="w-full bg-som-bg border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-8 flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <AnimatePresence>
+                        {profileSuccess && (
+                          <motion.div 
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -10 }}
+                            className="flex items-center space-x-2 text-green-600"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span className="text-[10px] uppercase tracking-widest font-bold">Profile Updated</span>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    <button 
+                      type="submit"
+                      disabled={isUpdatingProfile}
+                      className="bg-som-ink text-white text-[10px] uppercase tracking-[0.2em] font-bold px-12 py-5 rounded-full hover:bg-som-olive transition-all shadow-xl shadow-som-ink/10 disabled:opacity-50"
+                    >
+                      {isUpdatingProfile ? 'Updating...' : 'Save Changes'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </motion.div>
         )}
       </main>
 

@@ -9,85 +9,168 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import { User, Attendance, Schedule, Notification } from './types';
 import { INITIAL_MOCK_USERS, INITIAL_GOALS, INITIAL_ATTENDANCE, INITIAL_EVALUATIONS, INITIAL_SCHEDULE, INITIAL_NOTIFICATIONS, MockUser, Goal, Evaluation } from './mockData';
+import { auth, db } from '../firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { 
+  collection, 
+  onSnapshot, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  query, 
+  where,
+  getDocFromServer
+} from 'firebase/firestore';
+import { handleFirestoreError, OperationType } from './lib/firebaseUtils';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
-  // Shared states for persistence between logins
-  const [mockUsers, setMockUsers] = useState<MockUser[]>(() => {
-    const saved = localStorage.getItem('som_mockUsers');
-    return saved ? JSON.parse(saved) : INITIAL_MOCK_USERS;
-  });
-  const [goals, setGoals] = useState<Goal[]>(() => {
-    const saved = localStorage.getItem('som_goals');
-    return saved ? JSON.parse(saved) : INITIAL_GOALS;
-  });
-  const [attendance, setAttendance] = useState<Attendance[]>(() => {
-    const saved = localStorage.getItem('som_attendance');
-    return saved ? JSON.parse(saved) : INITIAL_ATTENDANCE;
-  });
-  const [evaluations, setEvaluations] = useState<Evaluation[]>(() => {
-    const saved = localStorage.getItem('som_evaluations');
-    return saved ? JSON.parse(saved) : INITIAL_EVALUATIONS;
-  });
-  const [schedule, setSchedule] = useState<Schedule>(() => {
-    const saved = localStorage.getItem('som_schedule');
-    return saved ? JSON.parse(saved) : INITIAL_SCHEDULE;
-  });
-  const [notifications, setNotifications] = useState<Notification[]>(() => {
-    const saved = localStorage.getItem('som_notifications');
-    return saved ? JSON.parse(saved) : INITIAL_NOTIFICATIONS;
-  });
+  // Shared states
+  const [mockUsers, setMockUsers] = useState<MockUser[]>(INITIAL_MOCK_USERS);
+  const [goals, setGoals] = useState<Goal[]>(INITIAL_GOALS);
+  const [attendance, setAttendance] = useState<Attendance[]>(INITIAL_ATTENDANCE);
+  const [evaluations, setEvaluations] = useState<Evaluation[]>(INITIAL_EVALUATIONS);
+  const [schedule, setSchedule] = useState<Schedule>(INITIAL_SCHEDULE);
+  const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
 
-  // Persist states to localStorage
+  // Test connection to Firestore
   useEffect(() => {
-    localStorage.setItem('som_mockUsers', JSON.stringify(mockUsers));
-  }, [mockUsers]);
-
-  useEffect(() => {
-    localStorage.setItem('som_goals', JSON.stringify(goals));
-  }, [goals]);
-
-  useEffect(() => {
-    localStorage.setItem('som_attendance', JSON.stringify(attendance));
-  }, [attendance]);
-
-  useEffect(() => {
-    localStorage.setItem('som_evaluations', JSON.stringify(evaluations));
-  }, [evaluations]);
-
-  useEffect(() => {
-    localStorage.setItem('som_schedule', JSON.stringify(schedule));
-  }, [schedule]);
-
-  useEffect(() => {
-    localStorage.setItem('som_notifications', JSON.stringify(notifications));
-  }, [notifications]);
-
-  useEffect(() => {
-    // Simulate initial loading
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1500);
-    return () => clearTimeout(timer);
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if(error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. ");
+        }
+      }
+    }
+    testConnection();
   }, []);
 
-  const handleLogin = (userData: User) => {
-    setIsLoading(true);
-    setTimeout(() => {
-      setUser(userData);
+  // Auth state listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            setUser(userDoc.data() as User);
+          } else {
+            // New user - default to intern for demo purposes if not found
+            // EXCEPT for the default admin email
+            const isAdminEmail = firebaseUser.email === "areifaqib@gmail.com";
+            const newUser: User = {
+              id: firebaseUser.uid,
+              name: firebaseUser.displayName || 'New User',
+              email: firebaseUser.email || '',
+              role: isAdminEmail ? 'admin' : 'intern'
+            };
+            await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+            await setDoc(doc(db, 'public_users', firebaseUser.uid), {
+              id: newUser.id,
+              name: newUser.name,
+              role: newUser.role
+            });
+            setUser(newUser);
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+        }
+      } else {
+        setUser(null);
+      }
+      setIsAuthReady(true);
       setIsLoading(false);
-    }, 1000);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Real-time Listeners
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
+
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const usersData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as MockUser));
+      setMockUsers(usersData.length > 0 ? usersData : INITIAL_MOCK_USERS);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
+
+    const unsubCurrentUser = onSnapshot(doc(db, 'users', user.id), (doc) => {
+      if (doc.exists()) {
+        setUser(doc.data() as User);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.id}`));
+
+    // Scoped queries based on role
+    const goalsQuery = user.role === 'admin' 
+      ? collection(db, 'goals') 
+      : user.role === 'supervisor'
+        ? query(collection(db, 'goals'), where('supervisorId', '==', user.id))
+        : query(collection(db, 'goals'), where('userId', '==', user.id));
+
+    const attendanceQuery = user.role === 'admin'
+      ? collection(db, 'attendance')
+      : user.role === 'supervisor'
+        ? query(collection(db, 'attendance'), where('supervisorId', '==', user.id))
+        : query(collection(db, 'attendance'), where('userId', '==', user.id));
+
+    const evaluationsQuery = user.role === 'admin'
+      ? collection(db, 'evaluations')
+      : user.role === 'supervisor'
+        ? query(collection(db, 'evaluations'), where('supervisorId', '==', user.id))
+        : query(collection(db, 'evaluations'), where('internId', '==', user.id));
+
+    const unsubGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Goal));
+      setGoals(goalsData.length > 0 ? goalsData : INITIAL_GOALS);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'goals'));
+
+    const unsubAttendance = onSnapshot(attendanceQuery, (snapshot) => {
+      const attendanceData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Attendance));
+      setAttendance(attendanceData.length > 0 ? attendanceData : INITIAL_ATTENDANCE);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
+
+    const unsubEvaluations = onSnapshot(evaluationsQuery, (snapshot) => {
+      const evaluationsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Evaluation));
+      setEvaluations(evaluationsData.length > 0 ? evaluationsData : INITIAL_EVALUATIONS);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'evaluations'));
+
+    const unsubSchedule = onSnapshot(doc(db, 'settings', 'schedule'), (snapshot) => {
+      if (snapshot.exists()) {
+        setSchedule({ ...snapshot.data(), id: snapshot.id } as Schedule);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'settings/schedule'));
+
+    const unsubNotifications = onSnapshot(query(collection(db, 'notifications'), where('userId', '==', user.id)), (snapshot) => {
+      const notificationsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Notification));
+      setNotifications(notificationsData);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'notifications'));
+
+    return () => {
+      unsubUsers();
+      unsubCurrentUser();
+      unsubGoals();
+      unsubAttendance();
+      unsubEvaluations();
+      unsubSchedule();
+      unsubNotifications();
+    };
+  }, [isAuthReady, user?.id, user?.role]);
+
+  const handleLogout = async () => {
+    setIsLoading(true);
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
+    setIsLoading(false);
   };
 
-  const handleLogout = () => {
-    setIsLoading(true);
-    setTimeout(() => {
-      setUser(null);
-      setIsLoading(false);
-    }, 800);
-  };
+  if (!isAuthReady) return null;
 
   return (
     <div className="min-h-screen bg-som-bg selection:bg-som-olive selection:text-white">
@@ -128,7 +211,7 @@ export default function App() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5 }}
           >
-            <Login onLogin={handleLogin} mockUsers={mockUsers} />
+            <Login mockUsers={mockUsers} />
           </motion.div>
         ) : (
           <motion.div
@@ -142,17 +225,11 @@ export default function App() {
               user={user} 
               onLogout={handleLogout}
               mockUsers={mockUsers}
-              setMockUsers={setMockUsers}
               goals={goals}
-              setGoals={setGoals}
               attendance={attendance}
-              setAttendance={setAttendance}
               evaluations={evaluations}
-              setEvaluations={setEvaluations}
               schedule={schedule}
-              setSchedule={setSchedule}
               notifications={notifications}
-              setNotifications={setNotifications}
             />
           </motion.div>
         )}

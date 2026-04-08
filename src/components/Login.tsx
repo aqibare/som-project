@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Role, User } from '../types';
+import { Role } from '../types';
 import { cn } from '../lib/utils';
-import { LogIn, Shield, UserCircle, Briefcase, ArrowLeft, Check } from 'lucide-react';
-import { INITIAL_MOCK_USERS, MockUser } from '../mockData';
+import { LogIn, Shield, UserCircle, Briefcase, ArrowLeft } from 'lucide-react';
+import { MockUser } from '../mockData';
+import { auth, db } from '../../firebase';
+import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { KeyRound, Hash } from 'lucide-react';
 
 interface LoginProps {
-  onLogin: (user: User) => void;
   mockUsers: MockUser[];
 }
 
@@ -15,51 +18,80 @@ const roles: { id: Role; label: string; icon: React.ReactNode; description: stri
     id: 'supervisor',
     label: 'Supervisor',
     icon: <Shield className="w-5 h-5" />,
-    description: 'Full access to oversee all operations and personnel.'
+    description: 'Oversee operations and personnel with your system ID.'
   },
   {
     id: 'admin',
     label: 'Admin',
     icon: <UserCircle className="w-5 h-5" />,
-    description: 'Manage system settings, users, and daily administrative tasks.'
+    description: 'Manage system settings and users via Google authentication.'
   },
   {
     id: 'intern',
     label: 'Intern',
     icon: <Briefcase className="w-5 h-5" />,
-    description: 'Limited access for learning and assisting in basic tasks.'
+    description: 'Access your learning portal using your assigned Code ID.'
   }
 ];
 
-export default function Login({ onLogin, mockUsers }: LoginProps) {
+export default function Login({ mockUsers }: LoginProps) {
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);
-  const [showAccountSelection, setShowAccountSelection] = useState(false);
-  const [email, setEmail] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [codeId, setCodeId] = useState('');
   const [password, setPassword] = useState('');
 
-  const filteredUsers = mockUsers.filter(u => u.role === selectedRole);
+  const handleGoogleLogin = async () => {
+    if (selectedRole !== 'admin') {
+      setError('Please use Code ID login for this role');
+      return;
+    }
 
-  const handleRoleSelect = (role: Role) => {
-    setSelectedRole(role);
-    setShowAccountSelection(true);
+    setIsLoading(true);
+    setError(null);
+    const provider = new GoogleAuthProvider();
+    
+    try {
+      await signInWithPopup(auth, provider);
+      // App.tsx will handle the user profile creation/loading
+    } catch (err: any) {
+      console.error("Login error:", err);
+      setError(err.message || 'Failed to sign in with Google');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleAccountSelect = (user: User) => {
-    onLogin(user);
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleCodeLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedRole) return;
+    if (!selectedRole || selectedRole === 'admin') return;
+    if (!codeId || !password) {
+      setError('Please enter both Code ID and Password');
+      return;
+    }
 
-    // Simulate login with manual credentials
-    const user: User = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: selectedRole.charAt(0).toUpperCase() + selectedRole.slice(1) + ' User',
-      email: email || `${selectedRole}@example.com`,
-      role: selectedRole
-    };
-    onLogin(user);
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Behind the scenes, we use email/password auth
+      // The email is codeId@som.portal
+      const email = `${codeId.trim()}@som.portal`;
+      await signInWithEmailAndPassword(auth, email, password);
+      
+      // Verification of role happens automatically because the app will load the user profile
+      // and if the role doesn't match, we could sign them out, but usually the admin
+      // creates the user with the correct role.
+    } catch (err: any) {
+      console.error("Code login error:", err);
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('Invalid Code ID or Password');
+      } else {
+        setError(err.message || 'Failed to sign in');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -82,133 +114,144 @@ export default function Login({ onLogin, mockUsers }: LoginProps) {
             </div>
           </motion.div>
           <h1 className="text-4xl font-light tracking-tight mb-2 serif">
-            {showAccountSelection ? 'Select Account' : 'Welcome Back'}
+            Portal Access
           </h1>
           <p className="text-som-ink/60 font-light text-sm uppercase tracking-widest">
-            {showAccountSelection ? `Available ${selectedRole}s` : 'Select your role to continue'}
+            {selectedRole ? `Accessing as ${selectedRole}` : 'Select your role to continue'}
           </p>
         </div>
 
-        <AnimatePresence mode="wait">
-          {!showAccountSelection ? (
-            <motion.div
-              key="role-selection"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              className="space-y-8"
-            >
-              <div className="grid grid-cols-1 gap-4">
-                {roles.map((role) => (
-                  <motion.button
-                    key={role.id}
-                    type="button"
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    onClick={() => handleRoleSelect(role.id)}
-                    className={cn(
-                      "relative flex items-center p-4 rounded-2xl border transition-all duration-300 text-left group bg-white/40 border-som-ink/10 hover:border-som-olive/30 hover:bg-white/60"
-                    )}
-                  >
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center mr-4 bg-som-bg transition-colors">
-                      {role.icon}
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-medium text-sm">{role.label}</h3>
-                      <p className="text-xs font-light leading-relaxed text-som-ink/50">
-                        {role.description}
-                      </p>
-                    </div>
-                  </motion.button>
-                ))}
-              </div>
+        <div className="space-y-8">
+          <div className="grid grid-cols-1 gap-4">
+            {roles.map((role) => (
+              <motion.button
+                key={role.id}
+                type="button"
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
+                onClick={() => {
+                  setSelectedRole(role.id);
+                  setError(null);
+                }}
+                className={cn(
+                  "relative flex items-center p-4 rounded-2xl border transition-all duration-300 text-left group bg-white/40",
+                  selectedRole === role.id 
+                    ? "border-som-olive bg-white/80 shadow-sm" 
+                    : "border-som-ink/10 hover:border-som-olive/30 hover:bg-white/60"
+                )}
+              >
+                <div className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center mr-4 transition-colors",
+                  selectedRole === role.id ? "bg-som-olive text-white" : "bg-som-bg"
+                )}>
+                  {role.icon}
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-medium text-sm">{role.label}</h3>
+                  <p className="text-xs font-light leading-relaxed text-som-ink/50">
+                    {role.description}
+                  </p>
+                </div>
+              </motion.button>
+            ))}
+          </div>
 
-              <form onSubmit={handleLogin} className="space-y-8">
-                <div className="space-y-4">
+          <AnimatePresence mode="wait">
+            {selectedRole === 'admin' ? (
+              <motion.div
+                key="admin-login"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-4"
+              >
+                <motion.button
+                  onClick={handleGoogleLogin}
+                  disabled={isLoading}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className={cn(
+                    "w-full py-4 rounded-full font-medium text-sm tracking-widest uppercase transition-all duration-500 flex items-center justify-center space-x-3 bg-som-ink text-white hover:bg-som-olive shadow-xl shadow-som-ink/10",
+                    isLoading && "opacity-70 cursor-not-allowed"
+                  )}
+                >
+                  {isLoading ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <LogIn className="w-4 h-4" />
+                      <span>Sign in with Google</span>
+                    </>
+                  )}
+                </motion.button>
+              </motion.div>
+            ) : selectedRole ? (
+              <motion.form
+                key="code-login"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                onSubmit={handleCodeLogin}
+                className="space-y-4"
+              >
+                <div className="space-y-3">
                   <div className="relative">
-                    <input
-                      type="email"
-                      placeholder="Email Address"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-white/40 border-b border-som-ink/10 py-3 px-1 focus:outline-none focus:border-som-olive transition-colors font-light text-sm"
+                    <Hash className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-som-ink/30" />
+                    <input 
+                      type="text"
+                      placeholder="Code ID (e.g. SOM-1234)"
+                      value={codeId}
+                      onChange={(e) => setCodeId(e.target.value)}
+                      className="w-full bg-white border border-som-ink/5 rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                      required
                     />
                   </div>
                   <div className="relative">
-                    <input
+                    <KeyRound className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-som-ink/30" />
+                    <input 
                       type="password"
                       placeholder="Password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-white/40 border-b border-som-ink/10 py-3 px-1 focus:outline-none focus:border-som-olive transition-colors font-light text-sm"
+                      className="w-full bg-white border border-som-ink/5 rounded-full py-4 pl-12 pr-6 text-sm focus:ring-1 focus:ring-som-olive transition-all placeholder:text-som-ink/20"
+                      required
                     />
                   </div>
                 </div>
 
                 <motion.button
                   type="submit"
+                  disabled={isLoading}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  disabled={!selectedRole && !email}
                   className={cn(
-                    "w-full py-4 rounded-full font-medium text-sm tracking-widest uppercase transition-all duration-500 flex items-center justify-center space-x-2",
-                    (selectedRole || email) 
-                      ? "bg-som-ink text-white hover:bg-som-olive" 
-                      : "bg-som-ink/10 text-som-ink/30 cursor-not-allowed"
+                    "w-full py-4 rounded-full font-medium text-sm tracking-widest uppercase transition-all duration-500 flex items-center justify-center space-x-3 bg-som-ink text-white hover:bg-som-olive shadow-xl shadow-som-ink/10",
+                    isLoading && "opacity-70 cursor-not-allowed"
                   )}
                 >
-                  <span>Enter Portal</span>
-                  <LogIn className="w-4 h-4" />
+                  {isLoading ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <LogIn className="w-4 h-4" />
+                      <span>Access Portal</span>
+                    </>
+                  )}
                 </motion.button>
-              </form>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="account-selection"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="space-y-6"
+              </motion.form>
+            ) : null}
+          </AnimatePresence>
+
+          {error && (
+            <motion.p 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-red-500 text-xs text-center font-light"
             >
-              <button 
-                onClick={() => setShowAccountSelection(false)}
-                className="flex items-center space-x-2 text-[10px] uppercase tracking-widest font-bold text-som-ink/40 hover:text-som-ink transition-colors mb-4"
-              >
-                <ArrowLeft className="w-3 h-3" />
-                <span>Back to Roles</span>
-              </button>
-
-              <div className="grid grid-cols-1 gap-3">
-                {filteredUsers.map((u) => (
-                  <motion.button
-                    key={u.id}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => handleAccountSelect(u)}
-                    className="flex items-center p-4 rounded-2xl border border-som-ink/5 bg-white/60 hover:border-som-olive/30 transition-all text-left group"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-som-bg flex items-center justify-center mr-4 serif italic text-lg text-som-ink/40 group-hover:bg-som-olive group-hover:text-white transition-colors">
-                      {u.name[0]}
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-sm font-medium">{u.name}</h4>
-                      <p className="text-[10px] text-som-ink/40">{u.email}</p>
-                    </div>
-                    <div className="p-2 rounded-full bg-som-bg group-hover:bg-som-olive/10 text-transparent group-hover:text-som-olive transition-all">
-                      <Check className="w-3 h-3" />
-                    </div>
-                  </motion.button>
-                ))}
-              </div>
-
-              <div className="pt-4 text-center">
-                <p className="text-[10px] text-som-ink/30 italic">
-                  Select an account above to enter the {selectedRole} dashboard.
-                </p>
-              </div>
-            </motion.div>
+              {error}
+            </motion.p>
           )}
-        </AnimatePresence>
+        </div>
 
         <div className="mt-12 text-center">
           <p className="text-xs text-som-ink/40 font-light tracking-wide">

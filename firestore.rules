@@ -1,0 +1,245 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId
+    // Fields:
+    //   - id: string (required) - userId
+    //   - name: string (required) - user name
+    //   - email: string (required, email) - user email
+    //   - role: string (required, enum: supervisor, admin, intern) - user role
+    //   - supervisorId: string (optional) - ID of the supervisor
+    //
+    // Collection: public_users
+    // Document ID: userId
+    // Fields:
+    //   - id: string (required) - userId
+    //   - name: string (required) - user name
+    //   - role: string (required, enum: supervisor, admin, intern) - user role
+    //
+    // Collection: goals
+    // Document ID: goalId
+    // Fields:
+    //   - id: string (required) - goalId
+    //   - userId: string (required) - internId
+    //   - title: string (required) - goal title
+    //   - progress: number (required) - 0-100
+    //   - category: string (required) - goal category
+    //   - steps: list (required) - list of step objects
+    //
+    // Collection: attendance
+    // Document ID: attendanceId
+    // Fields:
+    //   - id: string (required) - attendanceId
+    //   - userId: string (required) - internId
+    //   - date: string (required, date) - YYYY-MM-DD
+    //   - checkIn: string (required) - HH:MM
+    //   - checkOut: string (optional) - HH:MM
+    //   - status: string (required, enum: present, absent, late)
+    //
+    // Collection: evaluations
+    // Document ID: evaluationId
+    // Fields:
+    //   - id: string (required) - evaluationId
+    //   - internId: string (required) - internId
+    //   - score: number (required) - 0-100
+    //   - feedback: string (required) - evaluation feedback
+    //   - date: string (required, date) - YYYY-MM-DD
+    //   - reaction: string (optional) - intern reaction
+    //
+    // Collection: notifications
+    // Document ID: notificationId
+    // Fields:
+    //   - id: string (required) - notificationId
+    //   - userId: string (required) - recipientId
+    //   - senderId: string (optional) - senderId
+    //   - title: string (required) - notification title
+    //   - message: string (required) - notification message
+    //   - type: string (required, enum: warning, info, error)
+    //   - date: string (required) - ISO date
+    //   - read: bool (required) - read status
+    //
+    // Collection: settings
+    // Document ID: schedule
+    // Fields:
+    //   - startTime: string (required) - HH:MM
+    //   - endTime: string (required) - HH:MM
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin') || (isAuthenticated() && request.auth.token.email == "areifaqib@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isSupervisor() {
+      return hasRole('supervisor');
+    }
+
+    function isIntern() {
+      return hasRole('intern');
+    }
+
+    function isSupervisorOf(internId) {
+      return isSupervisor() && get(/databases/$(database)/documents/users/$(internId)).data.supervisorId == request.auth.uid;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDate(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidEmail(data.email) &&
+             data.role in ['supervisor', 'admin', 'intern'] &&
+             (!('codeId' in data) || (data.codeId is string && data.codeId.size() > 0)) &&
+             (!('password' in data) || (data.password is string && data.password.size() > 0)) &&
+             (!('institution' in data) || (data.institution is string)) &&
+             (!('nim' in data) || (data.nim is string)) &&
+             (!('semester' in data) || (data.semester is string)) &&
+             (!('major' in data) || (data.major is string)) &&
+             (!('department' in data) || (data.department is string)) &&
+             (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
+             (!('assignedAt' in data) || (data.assignedAt is string || data.assignedAt == null)) &&
+             (!('photoURL' in data) || (data.photoURL is string)) &&
+             hasOnlyAllowedFields(['id', 'name', 'email', 'role', 'codeId', 'password', 'institution', 'nim', 'semester', 'major', 'department', 'supervisorId', 'assignedAt', 'photoURL']);
+    }
+
+    function isValidGoal(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.userId is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.progress is number && data.progress >= 0 && data.progress <= 100 &&
+             data.category is string &&
+             data.steps is list &&
+             (!('createdAt' in data) || data.createdAt is string) &&
+             (!('completedAt' in data) || (data.completedAt is string || data.completedAt == null)) &&
+             (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
+             hasOnlyAllowedFields(['id', 'userId', 'title', 'progress', 'category', 'steps', 'createdAt', 'completedAt', 'supervisorId']);
+    }
+
+    function isValidAttendance(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.userId is string &&
+             isValidDate(data.date) &&
+             data.checkIn is string &&
+             data.status in ['present', 'absent', 'late'] &&
+             (!('checkOut' in data) || data.checkOut is string) &&
+             (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
+             hasOnlyAllowedFields(['id', 'userId', 'date', 'checkIn', 'checkOut', 'status', 'supervisorId']);
+    }
+
+    function isValidEvaluation(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.internId is string &&
+             data.score is number && data.score >= 0 && data.score <= 100 &&
+             data.feedback is string && data.feedback.size() > 0 && data.feedback.size() < 2000 &&
+             isValidDate(data.date) &&
+             (!('reaction' in data) || data.reaction is string) &&
+             (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
+             hasOnlyAllowedFields(['id', 'internId', 'score', 'feedback', 'date', 'reaction', 'supervisorId']);
+    }
+
+    function isValidNotification(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.userId is string &&
+             data.title is string && data.title.size() > 0 &&
+             data.message is string && data.message.size() > 0 &&
+             data.type in ['warning', 'info', 'error'] &&
+             data.date is string &&
+             data.read is bool;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /public_users/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /goals/{goalId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isValidGoal(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidGoal(request.resource.data) && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
+      allow delete: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+    }
+
+    match /attendance/{attendanceId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isValidAttendance(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidAttendance(request.resource.data) && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /evaluations/{evaluationId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.internId) || isSupervisorOf(resource.data.internId) || isAdmin());
+      allow create: if isAuthenticated() && isValidEvaluation(request.resource.data) && (isSupervisorOf(request.resource.data.internId) || isAdmin());
+      allow update: if isAuthenticated() && isValidEvaluation(request.resource.data) && (isSupervisorOf(resource.data.internId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin() || isSupervisorOf(request.resource.data.userId));
+      allow update: if isOwner(resource.data.userId) && hasOnlyAllowedFields(['read']) || isAdmin();
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /settings/schedule {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

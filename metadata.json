@@ -1,5 +1,5 @@
 {
-  "name": "SOM Style Login",
+  "name": "SOM ",
   "description": "A minimalist login page with role-based access (Supervisor, Admin, Intern) inspired by drinksom.eu aesthetic.",
   "requestFramePermissions": []
 }

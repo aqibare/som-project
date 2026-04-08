@@ -5,11 +5,23 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  codeId?: string;
+  password?: string;
+  supervisorId?: string;
+  // New fields
+  institution?: string;
+  nim?: string;
+  semester?: string;
+  major?: string;
+  department?: string;
+  assignedAt?: string;
+  photoURL?: string;
 }
 
 export interface Attendance {
   id: string;
   userId: string;
+  supervisorId?: string;
   date: string;
   checkIn: string;
   checkOut?: string;

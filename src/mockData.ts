@@ -7,15 +7,19 @@ export interface MockUser extends User {
 export interface Goal {
   id: string;
   userId: string;
+  supervisorId?: string;
   title: string;
   progress: number;
   category: string;
   steps: { id: string; title: string; completed: boolean }[];
+  createdAt?: string;
+  completedAt?: string;
 }
 
 export interface Evaluation {
   id: string;
   internId: string;
+  supervisorId?: string;
   score: number;
   feedback: string;
   date: string;
@@ -25,10 +29,10 @@ export interface Evaluation {
 export const INITIAL_MOCK_USERS: MockUser[] = [
   { id: '1', name: 'Alice Smith', email: 'alice@som.eu', role: 'supervisor' },
   { id: '2', name: 'Bob Johnson', email: 'bob@som.eu', role: 'supervisor' },
-  { id: '3', name: 'Charlie Brown', email: 'charlie@som.eu', role: 'intern', supervisorId: '1' },
-  { id: '4', name: 'Diana Prince', email: 'diana@som.eu', role: 'intern', supervisorId: '1' },
+  { id: '3', name: 'Charlie Brown', email: 'charlie@som.eu', role: 'intern', supervisorId: '1', assignedAt: '2026-03-01' },
+  { id: '4', name: 'Diana Prince', email: 'diana@som.eu', role: 'intern', supervisorId: '1', assignedAt: '2026-03-15' },
   { id: '5', name: 'Ethan Hunt', email: 'ethan@som.eu', role: 'admin' },
-  { id: '6', name: 'Fiona Gallagher', email: 'fiona@som.eu', role: 'intern', supervisorId: '2' },
+  { id: '6', name: 'Fiona Gallagher', email: 'fiona@som.eu', role: 'intern', supervisorId: '2', assignedAt: '2026-04-01' },
 ];
 
 export const INITIAL_GOALS: Goal[] = [
