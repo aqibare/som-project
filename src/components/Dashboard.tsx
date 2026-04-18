@@ -306,11 +306,25 @@ export default function Dashboard({
         supervisorId: selectedSupervisor,
         assignedAt: assignedAt
       });
-      // Also update public profile if needed
+      // Also update public profile
       await updateDoc(doc(db, 'public_users', selectedIntern), {
         supervisorId: selectedSupervisor,
         assignedAt: assignedAt
       });
+
+      // Cascade update to existing goals, attendance, and evaluations 
+      // so the supervisor can see previous records
+      const goalsToUpdate = goals.filter(g => g.userId === selectedIntern);
+      const attendanceToUpdate = attendance.filter(a => a.userId === selectedIntern);
+      const evalsToUpdate = evaluations.filter(e => e.internId === selectedIntern);
+
+      const updatePromises = [
+        ...goalsToUpdate.map(g => updateDoc(doc(db, 'goals', g.id), { supervisorId: selectedSupervisor })),
+        ...attendanceToUpdate.map(a => updateDoc(doc(db, 'attendance', a.id), { supervisorId: selectedSupervisor })),
+        ...evalsToUpdate.map(e => updateDoc(doc(db, 'evaluations', e.id), { supervisorId: selectedSupervisor }))
+      ];
+
+      await Promise.all(updatePromises);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${selectedIntern}`);
     }
@@ -1051,6 +1065,7 @@ export default function Dashboard({
                         <th className="pb-4 font-bold">Code ID</th>
                         <th className="pb-4 font-bold">Password</th>
                         <th className="pb-4 font-bold">Supervisor</th>
+                        <th className="pb-4 font-bold">Assigned Date</th>
                         <th className="pb-4 font-bold text-right">Actions</th>
                       </tr>
                     </thead>
@@ -1059,8 +1074,12 @@ export default function Dashboard({
                         <tr key={u.id} className="group">
                           <td className="py-4">
                             <div className="flex items-center space-x-3">
-                              <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold uppercase">
-                                {u.name.split(' ').map(n => n[0]).join('')}
+                              <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold uppercase transition-transform group-hover:scale-110">
+                                {u.photoURL ? (
+                                  <img src={u.photoURL} alt="" className="w-full h-full rounded-full object-cover" referrerPolicy="no-referrer" />
+                                ) : (
+                                  u.name.split(' ').map(n => n[0]).join('')
+                                )}
                               </div>
                               <div>
                                 <p className="text-sm font-medium">{u.name}</p>
@@ -1088,6 +1107,11 @@ export default function Dashboard({
                                 ? mockUsers.find(s => s.id === u.supervisorId)?.name 
                                 : u.role === 'intern' ? 'Unassigned' : 'N/A'}
                             </p>
+                          </td>
+                          <td className="py-4">
+                             <p className="text-[10px] font-mono text-som-ink/40">
+                               {u.assignedAt || '--'}
+                             </p>
                           </td>
                           <td className="py-4 text-right">
                             <div className="flex items-center justify-end space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1742,6 +1766,43 @@ export default function Dashboard({
             transition={{ delay: 0.1, duration: 0.6 }}
             className="mb-12 space-y-12"
           >
+            {/* Supervisor Quick Profile */}
+            <div className="bg-white p-8 rounded-[2.5rem] border border-som-ink/5 shadow-sm overflow-hidden relative group">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-som-olive/5 rounded-full -mr-32 -mt-32 blur-3xl transition-all group-hover:bg-som-olive/10" />
+              <div className="relative flex flex-col md:flex-row items-center justify-between gap-8">
+                <div className="flex items-center space-x-6">
+                  <div className="w-24 h-24 rounded-full bg-som-bg border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
+                    {user.photoURL ? (
+                      <img src={user.photoURL} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <span className="serif italic text-4xl text-som-ink/20">{user.name[0]}</span>
+                    )}
+                  </div>
+                  <div>
+                    <h2 className="serif text-4xl mb-1">{user.name}</h2>
+                    <p className="text-sm text-som-ink/40 font-light flex items-center space-x-2">
+                      <span>{user.email}</span>
+                      <span className="w-1 h-1 rounded-full bg-som-ink/20" />
+                      <span className="text-som-olive">{user.department || 'General Operations'}</span>
+                    </p>
+                    <div className="flex items-center space-x-2 mt-4 bg-green-50 w-fit px-3 py-1 rounded-full border border-green-100">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                      <span className="text-[9px] uppercase tracking-widest font-bold text-green-600">Real-time Connected</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-col items-center md:items-end gap-3 w-full md:w-auto">
+                   <button 
+                     onClick={() => openEditUser(user)}
+                     className="px-8 py-3 rounded-full bg-som-ink text-white text-[10px] uppercase tracking-widest font-bold hover:bg-som-olive transition-all duration-500 shadow-lg shadow-som-ink/20 w-full md:w-auto"
+                   >
+                     Update Profile
+                   </button>
+                   <p className="text-[10px] text-som-ink/30 italic">Changes reflect instantly for your interns</p>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
               {/* Monitor Interns */}
               <div className="lg:col-span-2 space-y-8">

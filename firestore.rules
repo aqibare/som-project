@@ -192,7 +192,7 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
+      allow read: if isOwner(userId) || resource.data.supervisorId == request.auth.uid || isAdmin();
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
       allow delete: if isAdmin();
@@ -205,23 +205,23 @@ service cloud.firestore {
     }
 
     match /goals/{goalId} {
-      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
-      allow create: if isAuthenticated() && isValidGoal(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin());
-      allow update: if isAuthenticated() && isValidGoal(request.resource.data) && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
-      allow delete: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidGoal(request.resource.data) && (request.resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidGoal(request.resource.data) && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     match /attendance/{attendanceId} {
-      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
-      allow create: if isAuthenticated() && isValidAttendance(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin());
-      allow update: if isAuthenticated() && isValidAttendance(request.resource.data) && (isOwner(resource.data.userId) || isSupervisorOf(resource.data.userId) || isAdmin());
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidAttendance(request.resource.data) && (request.resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidAttendance(request.resource.data) && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
       allow delete: if isAdmin();
     }
 
     match /evaluations/{evaluationId} {
-      allow read: if isAuthenticated() && (isOwner(resource.data.internId) || isSupervisorOf(resource.data.internId) || isAdmin());
-      allow create: if isAuthenticated() && isValidEvaluation(request.resource.data) && (isSupervisorOf(request.resource.data.internId) || isAdmin());
-      allow update: if isAuthenticated() && isValidEvaluation(request.resource.data) && (isSupervisorOf(resource.data.internId) || isAdmin());
+      allow read: if isAuthenticated() && (resource.data.internId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidEvaluation(request.resource.data) && (request.resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidEvaluation(request.resource.data) && (resource.data.supervisorId == request.auth.uid || isAdmin());
       allow delete: if isAdmin();
     }
 

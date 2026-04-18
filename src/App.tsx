@@ -93,9 +93,15 @@ export default function App() {
   useEffect(() => {
     if (!isAuthReady || !user) return;
 
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+    const usersQuery = user.role === 'admin'
+      ? collection(db, 'users')
+      : user.role === 'supervisor'
+        ? query(collection(db, 'users'), where('supervisorId', '==', user.id))
+        : query(collection(db, 'users'), where('id', '==', user.id));
+
+    const unsubUsers = onSnapshot(usersQuery, (snapshot) => {
       const usersData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as MockUser));
-      setMockUsers(usersData.length > 0 ? usersData : INITIAL_MOCK_USERS);
+      setMockUsers(usersData);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
 
     const unsubCurrentUser = onSnapshot(doc(db, 'users', user.id), (doc) => {
@@ -125,17 +131,17 @@ export default function App() {
 
     const unsubGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Goal));
-      setGoals(goalsData.length > 0 ? goalsData : INITIAL_GOALS);
+      setGoals(goalsData);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'goals'));
 
     const unsubAttendance = onSnapshot(attendanceQuery, (snapshot) => {
       const attendanceData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Attendance));
-      setAttendance(attendanceData.length > 0 ? attendanceData : INITIAL_ATTENDANCE);
+      setAttendance(attendanceData);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
     const unsubEvaluations = onSnapshot(evaluationsQuery, (snapshot) => {
       const evaluationsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Evaluation));
-      setEvaluations(evaluationsData.length > 0 ? evaluationsData : INITIAL_EVALUATIONS);
+      setEvaluations(evaluationsData);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'evaluations'));
 
     const unsubSchedule = onSnapshot(doc(db, 'settings', 'schedule'), (snapshot) => {
