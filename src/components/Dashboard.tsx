@@ -715,7 +715,43 @@ export default function Dashboard({
     }
   };
 
-  const averageProgress = Math.round(goals.reduce((acc, g) => acc + g.progress, 0) / goals.length);
+  const averageProgress = goals.length > 0 
+    ? Math.round(goals.reduce((acc, g) => acc + g.progress, 0) / goals.length) 
+    : 0;
+
+  // Calculate real-time weekly activity based on performance data (Mon-Sun)
+  const weeklyActivityData = React.useMemo(() => {
+    const curr = new Date();
+    const currentDay = curr.getDay();
+    // Adjust to Monday as start of week (1=Mon, ..., 6=Sat, 0=Sun)
+    const diff = curr.getDate() - (currentDay === 0 ? 6 : currentDay - 1);
+    const monday = new Date(new Date().setDate(diff));
+    monday.setHours(0, 0, 0, 0);
+    
+    return Array.from({ length: 7 }).map((_, i) => {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + i);
+      const dateString = date.toISOString().split('T')[0];
+      
+      // Order of precedence for daily performance rating:
+      // 1. Evaluation Score (if supervisor evaluated that day)
+      // 2. Attendance Status (Present=85%, Late=50%, Absent=10%)
+      // 3. Goal Activity (Bonus for updates)
+      
+      const dayEval = evaluations.find(e => e.internId === user.id && e.date === dateString);
+      if (dayEval) return dayEval.score;
+
+      const dayAttend = attendance.find(a => a.userId === user.id && a.date === dateString);
+      if (dayAttend) {
+        if (dayAttend.status === 'present') return 85;
+        if (dayAttend.status === 'late') return 55;
+        return 15;
+      }
+      
+      // Default to 0 if no records found
+      return 0;
+    });
+  }, [evaluations, attendance, user.id]);
 
   return (
     <div className="min-h-screen bg-som-bg flex flex-col">
@@ -1642,12 +1678,16 @@ export default function Dashboard({
                   <div className="pt-4 border-t border-som-ink/5">
                     <h4 className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40 mb-4">Weekly Activity</h4>
                     <div className="flex items-end justify-between h-20 px-2">
-                      {[40, 70, 45, 90, 65, 80, 50].map((h, i) => (
+                      {weeklyActivityData.map((h, i) => (
                         <motion.div 
                           key={i}
                           initial={{ height: 0 }}
-                          animate={{ height: `${h}%` }}
-                          className="w-2 bg-som-olive/20 rounded-t-full hover:bg-som-olive transition-colors cursor-help"
+                          animate={{ height: `${Math.max(5, h)}%` }}
+                          className={cn(
+                            "w-2 rounded-t-full transition-colors cursor-help",
+                            h > 70 ? "bg-som-olive" : h > 40 ? "bg-som-olive/40" : "bg-som-olive/20"
+                          )}
+                          title={`${h}% Performance`}
                         />
                       ))}
                     </div>
