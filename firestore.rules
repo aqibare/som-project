@@ -152,7 +152,15 @@ service cloud.firestore {
              (!('createdAt' in data) || data.createdAt is string) &&
              (!('completedAt' in data) || (data.completedAt is string || data.completedAt == null)) &&
              (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
-             hasOnlyAllowedFields(['id', 'userId', 'title', 'progress', 'category', 'steps', 'createdAt', 'completedAt', 'supervisorId']);
+             (!('submissionPhotoUrl' in data) || (data.submissionPhotoUrl is string || data.submissionPhotoUrl == null)) &&
+             (!('submissionLink' in data) || (data.submissionLink is string || data.submissionLink == null)) &&
+             (!('linkHealthStatus' in data) || (data.linkHealthStatus in ['safe', 'suspicious', 'unknown'])) &&
+             (!('linkHealthReport' in data) || (data.linkHealthReport is string)) &&
+             (!('submittedAt' in data) || (data.submittedAt is string)) &&
+             (!('isApproved' in data) || (data.isApproved is bool)) &&
+             (!('approvedAt' in data) || (data.approvedAt is string)) &&
+             (!('approvedBy' in data) || (data.approvedBy is string)) &&
+             hasOnlyAllowedFields(['id', 'userId', 'title', 'progress', 'category', 'steps', 'createdAt', 'completedAt', 'supervisorId', 'submissionPhotoUrl', 'submissionLink', 'linkHealthStatus', 'linkHealthReport', 'submittedAt', 'isApproved', 'approvedAt', 'approvedBy']);
     }
 
     function isValidAttendance(data) {
@@ -160,10 +168,25 @@ service cloud.firestore {
              data.userId is string &&
              isValidDate(data.date) &&
              data.checkIn is string &&
-             data.status in ['present', 'absent', 'late'] &&
+             data.status in ['present', 'absent', 'late', 'excused'] &&
              (!('checkOut' in data) || data.checkOut is string) &&
              (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
              hasOnlyAllowedFields(['id', 'userId', 'date', 'checkIn', 'checkOut', 'status', 'supervisorId']);
+    }
+
+    function isValidReport(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.userId is string &&
+             data.type in ['activity', 'permission'] &&
+             data.description is string && data.description.size() > 0 &&
+             isValidDate(data.date) &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.createdAt is string &&
+             (!('supervisorId' in data) || (data.supervisorId is string || data.supervisorId == null)) &&
+             (!('title' in data) || (data.title is string || data.title == null)) &&
+             (!('approvedAt' in data) || (data.approvedAt is string || data.approvedAt == null)) &&
+             (!('approvedBy' in data) || (data.approvedBy is string || data.approvedBy == null)) &&
+             hasOnlyAllowedFields(['id', 'userId', 'supervisorId', 'type', 'title', 'description', 'date', 'status', 'createdAt', 'approvedAt', 'approvedBy']);
     }
 
     function isValidEvaluation(data) {
@@ -207,7 +230,10 @@ service cloud.firestore {
     match /goals/{goalId} {
       allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
       allow create: if isAuthenticated() && isValidGoal(request.resource.data) && (request.resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isAuthenticated() && isValidGoal(request.resource.data) && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidGoal(request.resource.data) && (
+        ( (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid) && (!('isApproved' in resource.data) || resource.data.isApproved == false) ) || 
+        isAdmin()
+      );
       allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
@@ -230,6 +256,17 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidNotification(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin() || isSupervisorOf(request.resource.data.userId));
       allow update: if isOwner(resource.data.userId) && hasOnlyAllowedFields(['read']) || isAdmin();
       allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.supervisorId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidReport(request.resource.data) && (request.resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidReport(request.resource.data) && (
+        (isOwner(resource.data.userId) && request.resource.data.status == resource.data.status) || 
+        (resource.data.supervisorId == request.auth.uid) || 
+        isAdmin()
+      );
+      allow delete: if isAdmin() || (isOwner(resource.data.userId) && resource.data.status == 'pending');
     }
 
     match /settings/schedule {

@@ -7,8 +7,8 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
-import { User, Attendance, Schedule, Notification } from './types';
-import { INITIAL_MOCK_USERS, INITIAL_GOALS, INITIAL_ATTENDANCE, INITIAL_EVALUATIONS, INITIAL_SCHEDULE, INITIAL_NOTIFICATIONS, MockUser, Goal, Evaluation } from './mockData';
+import { User, Attendance, Schedule, Notification, Report } from './types';
+import { INITIAL_MOCK_USERS, INITIAL_GOALS, INITIAL_ATTENDANCE, INITIAL_EVALUATIONS, INITIAL_SCHEDULE, INITIAL_NOTIFICATIONS, INITIAL_REPORTS, MockUser, Goal, Evaluation } from './mockData';
 import { auth, db } from '../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { 
@@ -19,7 +19,8 @@ import {
   setDoc, 
   query, 
   where,
-  getDocFromServer
+  getDocFromServer,
+  or
 } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from './lib/firebaseUtils';
 
@@ -35,6 +36,7 @@ export default function App() {
   const [evaluations, setEvaluations] = useState<Evaluation[]>(INITIAL_EVALUATIONS);
   const [schedule, setSchedule] = useState<Schedule>(INITIAL_SCHEDULE);
   const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
+  const [reports, setReports] = useState<Report[]>(INITIAL_REPORTS);
 
   // Test connection to Firestore
   useEffect(() => {
@@ -120,14 +122,20 @@ export default function App() {
     const attendanceQuery = user.role === 'admin'
       ? collection(db, 'attendance')
       : user.role === 'supervisor'
-        ? query(collection(db, 'attendance'), where('supervisorId', '==', user.id))
+        ? query(collection(db, 'attendance'), or(where('supervisorId', '==', user.id), where('userId', '==', user.id)))
         : query(collection(db, 'attendance'), where('userId', '==', user.id));
 
     const evaluationsQuery = user.role === 'admin'
       ? collection(db, 'evaluations')
       : user.role === 'supervisor'
-        ? query(collection(db, 'evaluations'), where('supervisorId', '==', user.id))
+        ? query(collection(db, 'evaluations'), or(where('supervisorId', '==', user.id), where('internId', '==', user.id)))
         : query(collection(db, 'evaluations'), where('internId', '==', user.id));
+
+    const reportsQuery = user.role === 'admin'
+      ? collection(db, 'reports')
+      : user.role === 'supervisor'
+        ? query(collection(db, 'reports'), or(where('supervisorId', '==', user.id), where('userId', '==', user.id)))
+        : query(collection(db, 'reports'), where('userId', '==', user.id));
 
     const unsubGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Goal));
@@ -143,6 +151,11 @@ export default function App() {
       const evaluationsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Evaluation));
       setEvaluations(evaluationsData);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'evaluations'));
+
+    const unsubReports = onSnapshot(reportsQuery, (snapshot) => {
+      const reportsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Report));
+      setReports(reportsData);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'reports'));
 
     const unsubSchedule = onSnapshot(doc(db, 'settings', 'schedule'), (snapshot) => {
       if (snapshot.exists()) {
@@ -161,6 +174,7 @@ export default function App() {
       unsubGoals();
       unsubAttendance();
       unsubEvaluations();
+      unsubReports();
       unsubSchedule();
       unsubNotifications();
     };
@@ -236,6 +250,7 @@ export default function App() {
               evaluations={evaluations}
               schedule={schedule}
               notifications={notifications}
+              reports={reports}
             />
           </motion.div>
         )}

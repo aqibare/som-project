@@ -25,7 +25,21 @@ export interface Attendance {
   date: string;
   checkIn: string;
   checkOut?: string;
-  status: 'present' | 'absent' | 'late';
+  status: 'present' | 'absent' | 'late' | 'excused';
+}
+
+export interface Report {
+  id: string;
+  userId: string;
+  supervisorId?: string;
+  type: 'activity' | 'permission';
+  title?: string;
+  description: string;
+  date: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  approvedAt?: string;
+  approvedBy?: string;
 }
 
 export interface Schedule {

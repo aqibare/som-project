@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Role, Attendance, Schedule, Notification } from '../types';
+import { User, Role, Attendance, Schedule, Notification, Report } from '../types';
 import { MockUser, Goal, Evaluation } from '../mockData';
+import { GoogleGenAI } from "@google/genai";
 import { 
   LogOut, Shield, UserCircle, Briefcase, Bell, Settings, Search, 
   Users, UserPlus, Link as LinkIcon, MoreVertical, Trash2, Edit2, Check, X,
   Target, TrendingUp, Plus, ArrowUpRight, Activity, Clock, Calendar, AlertTriangle,
-  Camera
+  Camera, Upload, ExternalLink, ShieldCheck, ShieldAlert, Loader2, Image as ImageIcon,
+  KeyRound, Hash, Mail, User as UserIcon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { db, secondaryAuth, auth } from '../../firebase';
@@ -23,7 +25,6 @@ import {
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { handleFirestoreError, OperationType } from '../lib/firebaseUtils';
-import { KeyRound, Hash, Mail, User as UserIcon, ShieldCheck } from 'lucide-react';
 
 interface DashboardProps {
   user: User;
@@ -34,6 +35,7 @@ interface DashboardProps {
   evaluations: Evaluation[];
   schedule: Schedule;
   notifications: Notification[];
+  reports: Report[];
 }
 
 export default function Dashboard({ 
@@ -44,8 +46,11 @@ export default function Dashboard({
   attendance,
   evaluations,
   schedule,
-  notifications
+  notifications,
+  reports
 }: DashboardProps) {
+  const today = new Date().toISOString().split('T')[0];
+  const isWeekend = [0, 6].includes(new Date().getDay());
   const [selectedSupervisor, setSelectedSupervisor] = useState('');
   const [selectedIntern, setSelectedIntern] = useState('');
   const [showAssignSuccess, setShowAssignSuccess] = useState(false);
@@ -87,6 +92,29 @@ export default function Dashboard({
   const [userError, setUserError] = useState<string | null>(null);
   const [showUserSuccess, setShowUserSuccess] = useState(false);
 
+  // New Goal Submission State
+  const [submittingGoalId, setSubmittingGoalId] = useState<string | null>(null);
+  const [submissionLink, setSubmissionLink] = useState('');
+  const [submissionFile, setSubmissionFile] = useState<File | null>(null);
+  const [submissionFilePreview, setSubmissionFilePreview] = useState<string | null>(null);
+  const [isSubmittingEvidence, setIsSubmittingEvidence] = useState(false);
+  const [isAnalyzingLink, setIsAnalyzingLink] = useState(false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [submissionSuccess, setSubmissionSuccess] = useState(false);
+
+  const [attendanceFilter, setAttendanceFilter] = useState('All');
+
+  // Report specific state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportType, setReportType] = useState<'activity' | 'permission'>('activity');
+  const [reportContent, setReportContent] = useState({
+    title: '',
+    description: '',
+    date: today
+  });
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportSuccess, setReportSuccess] = useState(false);
+
   const [activeTab, setActiveTab] = useState<'dashboard' | 'profile'>('dashboard');
   const [profileForm, setProfileForm] = useState({
     name: user.name,
@@ -114,7 +142,6 @@ export default function Dashboard({
     });
   }, [user]);
 
-  const today = new Date().toISOString().split('T')[0];
   const userAttendanceToday = attendance.find(a => a.userId === user.id && a.date === today);
 
   // Check for late interns and generate notifications
@@ -179,6 +206,33 @@ export default function Dashboard({
                   .catch(err => handleFirestoreError(err, OperationType.CREATE, 'notifications'));
               }
             }
+
+            // Notification for Admin
+            const adminUsers = mockUsers.filter(u => u.role === 'admin');
+            adminUsers.forEach(admin => {
+              const alreadyNotifiedAdmin = notifications.some(n => 
+                n.userId === admin.id && 
+                n.senderId === intern.id &&
+                n.date === currentToday && 
+                n.title === 'Attendance Alert (Admin)'
+              );
+
+              if (!alreadyNotifiedAdmin) {
+                const notificationId = Math.random().toString(36).substr(2, 9);
+                const notificationData = {
+                  id: notificationId,
+                  userId: admin.id,
+                  senderId: intern.id,
+                  title: 'Attendance Alert (Admin)',
+                  message: `INTERN ALERT: ${intern.name} is late/absent today.`,
+                  type: 'error',
+                  date: currentToday,
+                  read: false
+                };
+                addDoc(collection(db, 'notifications'), notificationData)
+                  .catch(err => handleFirestoreError(err, OperationType.CREATE, 'notifications'));
+              }
+            });
           }
         });
       }
@@ -246,19 +300,32 @@ export default function Dashboard({
         );
 
         if (!alreadyNotified) {
-          const notificationId = Math.random().toString(36).substr(2, 9);
-          const lateNotification = {
-            id: notificationId,
-            userId: intern.supervisorId,
+          const baseNotification = {
             senderId: user.id,
             title: 'Intern Late Check-in',
             message: `${user.name} checked in late at ${checkInTime}.`,
-            type: 'warning',
+            type: 'warning' as const,
             date: today,
             read: false
           };
+
           try {
-            await addDoc(collection(db, 'notifications'), lateNotification);
+            // Notify Supervisor
+            await addDoc(collection(db, 'notifications'), {
+              ...baseNotification,
+              id: Math.random().toString(36).substr(2, 9),
+              userId: intern.supervisorId
+            });
+
+            // Notify Admins
+            const adminUsers = mockUsers.filter(u => u.role === 'admin');
+            for (const admin of adminUsers) {
+              await addDoc(collection(db, 'notifications'), {
+                ...baseNotification,
+                id: Math.random().toString(36).substr(2, 9),
+                userId: admin.id
+              });
+            }
           } catch (err) {
             handleFirestoreError(err, OperationType.CREATE, 'notifications');
           }
@@ -276,6 +343,90 @@ export default function Dashboard({
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `attendance/${userAttendanceToday.id}`);
+    }
+  };
+
+  const handleCreateReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reportContent.description || !reportContent.date) return;
+    setIsSubmittingReport(true);
+
+    const reportId = Math.random().toString(36).substr(2, 9);
+    const newReport: Report = {
+      id: reportId,
+      userId: user.id,
+      supervisorId: user.supervisorId || '',
+      type: reportType,
+      title: reportContent.title,
+      description: reportContent.description,
+      date: reportContent.date,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+
+    try {
+      await addDoc(collection(db, 'reports'), newReport);
+      setReportSuccess(true);
+      setTimeout(() => setReportSuccess(false), 3000);
+      setShowReportModal(false);
+      setReportContent({ title: '', description: '', date: today });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'reports');
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
+
+  const handleApproveReport = async (reportId: string, status: 'approved' | 'rejected') => {
+    const report = reports.find(r => r.id === reportId);
+    if (!report) return;
+
+    try {
+      await updateDoc(doc(db, 'reports', reportId), {
+        status,
+        approvedAt: new Date().toISOString(),
+        approvedBy: user.id
+      });
+
+      // If approved and type is permission, update attendance
+      if (status === 'approved' && report.type === 'permission') {
+        // Find existing attendance for that date
+        const existingAtt = attendance.find(a => a.userId === report.userId && a.date === report.date);
+        
+        if (existingAtt) {
+          await updateDoc(doc(db, 'attendance', existingAtt.id), {
+            status: 'excused'
+          });
+        } else {
+          // Create new record
+          const attId = Math.random().toString(36).substr(2, 9);
+          await addDoc(collection(db, 'attendance'), {
+            id: attId,
+            userId: report.userId,
+            date: report.date,
+            status: 'excused',
+            checkIn: '--:--',
+            supervisorId: user.id
+          });
+        }
+      }
+
+      // Notify intern
+      const internId = report.userId;
+      const notificationId = Math.random().toString(36).substr(2, 9);
+      await addDoc(collection(db, 'notifications'), {
+        id: notificationId,
+        userId: internId,
+        senderId: user.id,
+        title: `Report ${status === 'approved' ? 'Disetujui' : 'Ditolak'}`,
+        message: `Laporan ${report.type === 'activity' ? 'kegiatan' : 'izin'} untuk tanggal ${report.date} telah ${status === 'approved' ? 'disetujui' : 'ditolak'}.`,
+        type: status === 'approved' ? 'info' : 'warning',
+        date: new Date().toISOString(),
+        read: false
+      });
+
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `reports/${reportId}`);
     }
   };
 
@@ -560,6 +711,11 @@ export default function Dashboard({
     const goal = goals.find(g => g.id === goalId);
     if (!goal) return;
 
+    if (goal.isApproved && user.role !== 'admin') {
+      alert("Tugas ini sudah disetujui dan dikunci.");
+      return;
+    }
+
     const updatedSteps = goal.steps.map(s => 
       s.id === stepId ? { ...s, completed: !s.completed } : s
     );
@@ -584,6 +740,136 @@ export default function Dashboard({
           senderId: user.id,
           title: 'Goal Completed',
           message: `${user.name} has completed the goal: "${goal.title}"`,
+          type: 'info',
+          date: new Date().toISOString(),
+          read: false
+        });
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `goals/${goalId}`);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      setSubmissionError("Ukuran foto maksimal 2 MB.");
+      return;
+    }
+
+    setSubmissionError(null);
+    setSubmissionFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setSubmissionFilePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const validateLinkWithAI = async (url: string) => {
+    if (!url) return { status: 'unknown', report: 'No URL provided' };
+    
+    setIsAnalyzingLink(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const prompt = `Analyze this URL: "${url}". Determine if it is a safe link, a phishing link, or suspicious. 
+      Return a JSON object in this format: 
+      { "status": "safe" | "suspicious", "report": "Short explanation in Indonesian about why it is safe or suspicious" }
+      Be conservative. Check for common phishing patterns or suspicious domains.`;
+
+      const result = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const response = JSON.parse(result.text || '{}');
+      return {
+        status: response.status || 'unknown',
+        report: response.report || 'Unable to scan link'
+      };
+    } catch (error) {
+      console.error("AI Link Validation Error:", error);
+      return { status: 'unknown', report: 'Error during link analysis' };
+    } finally {
+      setIsAnalyzingLink(false);
+    }
+  };
+
+  const handleGoalSubmission = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!submittingGoalId) return;
+
+    const goal = goals.find(g => g.id === submittingGoalId);
+    if (goal?.isApproved && user.role !== 'admin') {
+      setSubmissionError("Tugas ini sudah disetujui dan tidak dapat diubah.");
+      return;
+    }
+
+    setIsSubmittingEvidence(true);
+    setSubmissionError(null);
+
+    try {
+      let finalPhotoUrl = '';
+      if (submissionFilePreview) {
+        // In a real app we'd upload to Firebase Storage
+        // For this applet, we'll use the base64 as the URL (keeping it simple for demo)
+        finalPhotoUrl = submissionFilePreview;
+      }
+
+      let healthReport = { status: 'unknown' as 'safe' | 'suspicious' | 'unknown', report: '' };
+      if (submissionLink) {
+        healthReport = await validateLinkWithAI(submissionLink);
+      }
+
+      await updateDoc(doc(db, 'goals', submittingGoalId), {
+        submissionPhotoUrl: finalPhotoUrl || null,
+        submissionLink: submissionLink || null,
+        linkHealthStatus: healthReport.status,
+        linkHealthReport: healthReport.report,
+        submittedAt: new Date().toISOString()
+      });
+
+      setSubmissionSuccess(true);
+      setTimeout(() => {
+        setSubmissionSuccess(false);
+        setSubmittingGoalId(null);
+      }, 3000);
+
+      // Reset state
+      setSubmissionLink('');
+      setSubmissionFile(null);
+      setSubmissionFilePreview(null);
+
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `goals/${submittingGoalId}`);
+      setSubmissionError("Gagal mengirimkan bukti tugas.");
+    } finally {
+      setIsSubmittingEvidence(false);
+    }
+  };
+
+  const handleApproveGoal = async (goalId: string) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        isApproved: true,
+        approvedAt: new Date().toISOString(),
+        approvedBy: user.id
+      });
+      
+      const goal = goals.find(g => g.id === goalId);
+      if (goal) {
+        const notificationId = Math.random().toString(36).substr(2, 9);
+        await addDoc(collection(db, 'notifications'), {
+          id: notificationId,
+          userId: goal.userId,
+          senderId: user.id,
+          title: 'Goal Approved',
+          message: `Tugas "${goal.title}" Anda telah disetujui oleh supervisor.`,
           type: 'info',
           date: new Date().toISOString(),
           read: false
@@ -1172,6 +1458,129 @@ export default function Dashboard({
                 </div>
               </div>
 
+              {/* Real-time Attendance Monitor */}
+              <div className="lg:col-span-1 space-y-8">
+                <div className="bg-som-ink text-white p-8 rounded-[2rem] shadow-xl shadow-som-ink/20">
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 rounded-xl bg-som-olive/20 text-som-olive">
+                        <Clock className="w-5 h-5" />
+                      </div>
+                      <h3 className="serif text-2xl">Attendance Bar</h3>
+                    </div>
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] font-mono opacity-50 uppercase">{today}</span>
+                      <div className="flex items-center space-x-1">
+                        <div className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
+                        <span className="text-[8px] uppercase tracking-widest font-bold text-green-500">Live</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+                        <p className="text-[8px] uppercase tracking-widest font-bold opacity-30 mb-1">Total Assets</p>
+                        <p className="text-xl serif">
+                          {mockUsers.filter(u => u.role === 'intern').length} Interns <br/>
+                          {mockUsers.filter(u => u.role === 'supervisor').length} Mentors
+                        </p>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-som-olive/20 border border-som-olive/30">
+                        <p className="text-[8px] uppercase tracking-widest font-bold text-som-olive mb-1">Total Present</p>
+                        <p className="text-3xl serif text-som-olive">
+                          {attendance.filter(a => a.date === today && a.status !== 'absent').length}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                      <h4 className="text-[9px] uppercase tracking-widest font-bold opacity-40">Live Roster</h4>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[8px] opacity-30">Filter:</span>
+                        <div className="flex bg-white/5 p-0.5 rounded-lg border border-white/5">
+                          {['All', 'Intern', 'Mentor'].map(f => (
+                            <button 
+                              key={f}
+                              onClick={() => setAttendanceFilter(f)}
+                              className={cn(
+                                "text-[7px] uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-all",
+                                attendanceFilter === f ? "bg-som-olive text-white shadow-sm" : "text-white/40 hover:text-white"
+                              )}
+                            >
+                              {f}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                      {mockUsers
+                        .filter(u => u.role !== 'admin')
+                        .filter(u => {
+                          if (attendanceFilter === 'All') return true;
+                          if (attendanceFilter === 'Intern') return u.role === 'intern';
+                          if (attendanceFilter === 'Mentor') return u.role === 'supervisor';
+                          return true;
+                        })
+                        .map(member => {
+                          const att = attendance.find(a => a.userId === member.id && a.date === today);
+                          const isLead = att?.status === 'late';
+                          const isExcused = att?.status === 'excused';
+                          const isLate = isLead || (!att && !isWeekend && new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false}) > schedule.startTime);
+                          const isNotArrived = !att && !isWeekend && !isLate;
+                          
+                          return (
+                            <div key={member.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-all">
+                              <div className="flex items-center space-x-3">
+                                <div className="relative">
+                                  <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold overflow-hidden">
+                                    {member.photoURL ? (
+                                      <img src={member.photoURL} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                    ) : (
+                                      member.name[0]
+                                    )}
+                                  </div>
+                                  {att && (
+                                    <div className={cn(
+                                      "absolute -bottom-1 -right-1 w-3 h-3 border-2 border-som-ink rounded-full",
+                                      isExcused ? "bg-blue-500" : "bg-green-500"
+                                    )} />
+                                  )}
+                                </div>
+                                <div className="flex flex-col">
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-[11px] font-medium">{member.name}</span>
+                                    <span className={cn(
+                                      "text-[6px] uppercase px-1 rounded border",
+                                      member.role === 'supervisor' ? "border-som-clay/30 text-som-clay" : "border-som-olive/30 text-som-olive"
+                                    )}>
+                                      {member.role === 'supervisor' ? 'Mentor' : 'Intern'}
+                                    </span>
+                                  </div>
+                                  <span className="text-[8px] opacity-40 uppercase tracking-widest">
+                                    {isExcused ? "Izin Disetujui" : att ? (att.checkOut ? `Out: ${att.checkOut}` : `In: ${att.checkIn}`) : isWeekend ? 'Weekend Off' : 'Not Check-in'}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className={cn(
+                                "px-2 py-1 rounded text-[8px] font-bold uppercase tracking-widest",
+                                att?.status === 'present' ? "bg-green-500/20 text-green-400" :
+                                isExcused ? "bg-blue-500/20 text-blue-400" :
+                                isLate ? "bg-red-500/20 text-red-400" :
+                                isNotArrived ? "bg-som-olive/20 text-som-olive" : "bg-white/10 text-white/40"
+                              )}>
+                                {att?.status === 'present' ? 'Present' : isExcused ? 'Excused' : isLate ? 'Late' : isNotArrived ? 'Pending' : isWeekend ? 'Holiday' : 'Offline'}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Mentorship Monitoring */}
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
@@ -1249,6 +1658,74 @@ export default function Dashboard({
                       })}
                     </tbody>
                   </table>
+                </div>
+              </motion.div>
+
+              {/* Global Activity & Permission Monitoring */}
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4, duration: 0.6 }}
+                className="lg:col-span-3 bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm"
+              >
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-som-ink/5 text-som-ink">
+                      <Activity className="w-5 h-5" />
+                    </div>
+                    <h3 className="serif text-2xl">Monitoring Kegiatan & Izin Global</h3>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[10px] font-mono opacity-50 uppercase">Live monitoring</span>
+                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {reports.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8).map(report => {
+                    const intern = mockUsers.find(u => u.id === report.userId);
+                    return (
+                      <div key={report.id} className="p-4 rounded-2xl bg-som-bg/30 border border-som-ink/5 space-y-3">
+                        <div className="flex items-center space-x-2">
+                          <div className="w-6 h-6 rounded-full bg-som-bg flex items-center justify-center text-[8px] font-bold overflow-hidden">
+                            {intern?.photoURL ? (
+                              <img src={intern.photoURL} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              intern?.name[0]
+                            )}
+                          </div>
+                          <span className="text-[10px] font-bold text-som-ink truncate">{intern?.name}</span>
+                        </div>
+                        <div className="flex justify-between items-start">
+                          <span className={cn(
+                            "text-[7px] uppercase tracking-widest font-bold px-1.5 py-0.5 rounded",
+                            report.type === 'activity' ? "bg-som-olive/10 text-som-olive" : "bg-som-clay/10 text-som-clay"
+                          )}>
+                            {report.type === 'activity' ? 'Kegiatan' : 'Izin'}
+                          </span>
+                          <span className="text-[8px] font-mono opacity-40">{report.date}</span>
+                        </div>
+                        <p className="text-[10px] text-som-ink/70 line-clamp-2 italic leading-tight">
+                          "{report.title || report.description}"
+                        </p>
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="flex items-center space-x-1">
+                            <div className={cn(
+                              "w-1.5 h-1.5 rounded-full",
+                              report.status === 'approved' ? "bg-green-500" :
+                              report.status === 'rejected' ? "bg-red-500" : "bg-yellow-500"
+                            )} />
+                            <span className="text-[8px] uppercase font-bold opacity-60">{report.status}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {reports.length === 0 && (
+                    <div className="col-span-full py-12 text-center opacity-30 italic serif">
+                      Tidak ada aktivitas terbaru.
+                    </div>
+                  )}
                 </div>
               </motion.div>
 
@@ -1481,6 +1958,12 @@ export default function Dashboard({
                                   Selesai: {new Date(goal.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                 </p>
                               )}
+                              {(goal as any).isApproved && (
+                                <p className="text-[8px] text-green-600 font-bold flex items-center space-x-1 mt-1">
+                                  <ShieldCheck className="w-2.5 h-2.5" />
+                                  <span>Disetujui: {new Date((goal as any).approvedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                                </p>
+                              )}
                             </div>
                             <p className="text-[10px] text-som-ink/40 italic mt-2">
                               {completedSteps} of {totalSteps} milestones achieved
@@ -1512,7 +1995,12 @@ export default function Dashboard({
                           <div className="space-y-3">
                             <div className="flex items-center justify-between mb-2">
                               <p className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Milestones</p>
-                              {goal.progress === 100 && (
+                              {(goal as any).isApproved ? (
+                                <span className="text-[8px] uppercase tracking-widest font-bold text-green-600 flex items-center space-x-1">
+                                  <ShieldCheck className="w-2.5 h-2.5" />
+                                  <span>Tugas Disetujui & Dikunci</span>
+                                </span>
+                              ) : goal.progress === 100 && (
                                 <span className="text-[8px] uppercase tracking-widest font-bold text-green-600 flex items-center space-x-1">
                                   <Check className="w-2 h-2" />
                                   <span>Goal Completed</span>
@@ -1546,6 +2034,220 @@ export default function Dashboard({
                                 </button>
                               ))}
                             </div>
+
+                            {/* Submission Area */}
+                            {goal.progress === 100 && (
+                              <div className="mt-8 pt-8 border-t border-som-ink/5">
+                                <div className="flex items-center justify-between mb-4">
+                                  <h5 className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40 italic">Bukti Pengerjaan Tugas</h5>
+                                  {(goal as any).submissionPhotoUrl || (goal as any).submissionLink ? (
+                                    <span className="text-[8px] uppercase tracking-widest font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded flex items-center space-x-1">
+                                      <ShieldCheck className="w-2.5 h-2.5" />
+                                      <span>Terkirim</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-[8px] uppercase tracking-widest font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded flex items-center space-x-1 animate-pulse">
+                                      <AlertTriangle className="w-2.5 h-2.5" />
+                                      <span>Wajib Upload Bukti</span>
+                                    </span>
+                                  )}
+                                </div>
+
+                                {((goal as any).submissionPhotoUrl || (goal as any).submissionLink) && submittingGoalId !== goal.id ? (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {(goal as any).submissionPhotoUrl && (
+                                      <div className="relative aspect-video rounded-2xl overflow-hidden border border-som-ink/5 group/img">
+                                        <img 
+                                          src={(goal as any).submissionPhotoUrl} 
+                                          alt="Bukti Foto" 
+                                          className="w-full h-full object-cover"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                        <div className="absolute inset-0 bg-som-ink/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center">
+                                          <button 
+                                            onClick={() => window.open((goal as any).submissionPhotoUrl, '_blank')}
+                                            className="p-2 bg-white rounded-full text-som-ink shadow-lg"
+                                          >
+                                            <ExternalLink className="w-4 h-4" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {(goal as any).submissionLink && (
+                                      <div className="p-4 rounded-2xl bg-som-bg/30 border border-som-ink/5 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[8px] uppercase tracking-widest font-bold text-som-ink/30">Link Terlampir</span>
+                                          {(goal as any).linkHealthStatus === 'safe' && (
+                                            <div className="flex items-center space-x-1 text-green-600">
+                                              <ShieldCheck className="w-3 h-3" />
+                                              <span className="text-[8px] font-bold uppercase">Aman</span>
+                                            </div>
+                                          )}
+                                          {(goal as any).linkHealthStatus === 'suspicious' && (
+                                            <div className="flex items-center space-x-1 text-red-500">
+                                              <ShieldAlert className="w-3 h-3" />
+                                              <span className="text-[8px] font-bold uppercase">Mencurigakan</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                        <a 
+                                          href={(goal as any).submissionLink} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          className="text-xs text-som-olive font-medium break-all hover:underline flex items-center space-x-2"
+                                        >
+                                          <LinkIcon className="w-3 h-3" />
+                                          <span>{(goal as any).submissionLink}</span>
+                                        </a>
+                                        {(goal as any).linkHealthReport && (
+                                          <p className="text-[9px] text-som-ink/50 italic leading-relaxed bg-white/50 p-2 rounded-lg">
+                                            AI Analysis: {(goal as any).linkHealthReport}
+                                          </p>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="md:col-span-2 flex justify-end">
+                                      <button 
+                                        disabled={(goal as any).isApproved && user.role !== 'admin'}
+                                        onClick={() => {
+                                          setSubmittingGoalId(goal.id);
+                                          setSubmissionLink((goal as any).submissionLink || '');
+                                          setSubmissionFilePreview((goal as any).submissionPhotoUrl || null);
+                                        }}
+                                        className={cn(
+                                          "text-[9px] uppercase tracking-widest font-bold transition-colors flex items-center space-x-1",
+                                          ((goal as any).isApproved && user.role !== 'admin') ? "text-som-ink/10 cursor-not-allowed" : "text-som-ink/40 hover:text-som-olive"
+                                        )}
+                                      >
+                                        <Edit2 className="w-3 h-3" />
+                                        <span>Update Bukti</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <form onSubmit={handleGoalSubmission} className="space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                      {/* Photo Upload */}
+                                      <div className="space-y-3">
+                                        <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40 flex items-center space-x-2">
+                                          <ImageIcon className="w-3 h-3" />
+                                          <span>Upload Foto (Maks 2MB)</span>
+                                        </label>
+                                        <div className="relative group">
+                                          <input 
+                                            type="file" 
+                                            accept="image/*" 
+                                            id={`photo-upload-${goal.id}`}
+                                            onChange={handleFileChange}
+                                            className="hidden"
+                                          />
+                                          <label 
+                                            htmlFor={`photo-upload-${goal.id}`}
+                                            className={cn(
+                                              "relative flex flex-col items-center justify-center aspect-video rounded-2xl border-2 border-dashed transition-all cursor-pointer overflow-hidden",
+                                              submissionFilePreview ? "border-som-olive/30 bg-som-olive/5" : "border-som-ink/10 bg-som-bg/30 hover:border-som-olive/30 hover:bg-som-olive/5"
+                                            )}
+                                          >
+                                            {submissionFilePreview ? (
+                                              <>
+                                                <img 
+                                                  src={submissionFilePreview} 
+                                                  alt="Preview" 
+                                                  className="w-full h-full object-cover"
+                                                  referrerPolicy="no-referrer"
+                                                />
+                                                <div className="absolute inset-0 bg-som-ink/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                  <Upload className="w-6 h-6 text-white" />
+                                                </div>
+                                              </>
+                                            ) : (
+                                              <div className="flex flex-col items-center space-y-2 text-som-ink/30">
+                                                <Camera className="w-8 h-8" />
+                                                <span className="text-[10px] uppercase font-bold tracking-widest">Pilih Gambar</span>
+                                              </div>
+                                            )}
+                                          </label>
+                                        </div>
+                                      </div>
+
+                                      {/* Link Submission */}
+                                      <div className="space-y-3">
+                                        <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40 flex items-center space-x-2">
+                                          <LinkIcon className="w-3 h-3" />
+                                          <span>Lampirkan Link Tugas</span>
+                                        </label>
+                                        <div className="relative">
+                                          <input 
+                                            type="url"
+                                            value={submissionLink}
+                                            onChange={(e) => setSubmissionLink(e.target.value)}
+                                            placeholder="https://github.com/intern/project"
+                                            className="w-full bg-som-bg/30 border-none rounded-xl py-3 px-4 text-xs focus:ring-1 focus:ring-som-olive transition-all"
+                                          />
+                                          <div className="mt-2 p-3 rounded-xl bg-blue-50 border border-blue-100 flex items-start space-x-2">
+                                            <ShieldCheck className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" />
+                                            <p className="text-[9px] text-blue-700 leading-relaxed italic">
+                                              Setiap link akan dianalisis secara otomatis oleh sistem keamanan AI kami untuk memastikan keamanan.
+                                            </p>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {submissionError && (
+                                      <div className="p-3 rounded-xl bg-red-50 border border-red-100 flex items-center space-x-2 text-red-600">
+                                        <AlertTriangle className="w-4 h-4" />
+                                        <span className="text-[10px] font-medium">{submissionError}</span>
+                                      </div>
+                                    )}
+
+                                    {submissionSuccess && (
+                                      <div className="p-3 rounded-xl bg-green-50 border border-green-100 flex items-center space-x-2 text-green-600">
+                                        <Check className="w-4 h-4" />
+                                        <span className="text-[10px] font-medium">Bukti tugas berhasil dikirimkan!</span>
+                                      </div>
+                                    )}
+
+                                    <div className="flex items-center justify-end space-x-3 pt-4 border-t border-som-ink/5">
+                                      {submittingGoalId === goal.id && (
+                                        <button 
+                                          type="button"
+                                          onClick={() => {
+                                            setSubmittingGoalId(null);
+                                            setSubmissionLink('');
+                                            setSubmissionFilePreview(null);
+                                          }}
+                                          className="px-6 py-2.5 rounded-full text-som-ink/40 hover:text-som-ink text-[10px] uppercase tracking-widest font-bold transition-all"
+                                        >
+                                          Batal
+                                        </button>
+                                      )}
+                                      <button 
+                                        type="submit"
+                                        disabled={isSubmittingEvidence || (!submissionFile && !submissionLink)}
+                                        onClick={() => setSubmittingGoalId(goal.id)}
+                                        className={cn(
+                                          "px-8 py-2.5 rounded-full bg-som-olive text-white text-[10px] uppercase tracking-widest font-bold transition-all flex items-center space-x-2 shadow-lg shadow-som-olive/20",
+                                          (isSubmittingEvidence || (!submissionFile && !submissionLink)) ? "opacity-50 cursor-not-allowed" : "hover:bg-som-ink"
+                                        )}
+                                      >
+                                        {isSubmittingEvidence ? (
+                                          <>
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            <span>{isAnalyzingLink ? 'Menganalisis Link...' : 'Mengirimkan...'}</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Upload className="w-3.5 h-3.5" />
+                                            <span>Kirim Bukti Tugas</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    </div>
+                                  </form>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1575,7 +2277,12 @@ export default function Dashboard({
                     <div className="text-[10px] font-mono opacity-50">{today}</div>
                   </div>
 
-                  {!userAttendanceToday ? (
+                  {isWeekend ? (
+                    <div className="p-6 rounded-2xl bg-white/5 border border-white/10 text-center">
+                      <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1">Weekend Break</p>
+                      <p className="text-sm italic font-light opacity-60">Attendance is disabled on Saturday & Sunday.</p>
+                    </div>
+                  ) : !userAttendanceToday ? (
                     <div className="space-y-6">
                       <p className="text-sm font-light opacity-80">You haven't checked in for today yet. Please mark your attendance.</p>
                       <button 
@@ -1723,6 +2430,59 @@ export default function Dashboard({
                 <div className="mt-6 flex items-center space-x-2 text-[10px] font-bold text-som-olive cursor-pointer hover:underline">
                   <span>View All History</span>
                   <ArrowUpRight className="w-3 h-3" />
+                </div>
+              </div>
+
+              {/* Reports & Permissions Card */}
+              <div className="bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm">
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-som-ink/5 text-som-ink">
+                      <Calendar className="w-5 h-5" />
+                    </div>
+                    <h3 className="serif text-2xl">Laporan & Izin</h3>
+                  </div>
+                  <button 
+                    onClick={() => setShowReportModal(true)}
+                    className="p-2 rounded-full bg-som-olive text-white hover:bg-som-ink transition-all shadow-lg shadow-som-olive/20"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  {reports.filter(r => r.userId === user.id).length > 0 ? (
+                    reports.filter(r => r.userId === user.id)
+                      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                      .slice(0, 3)
+                      .map(report => (
+                      <div key={report.id} className="p-4 rounded-2xl bg-som-bg/30 border border-som-ink/5">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={cn(
+                            "text-[8px] uppercase tracking-widest font-bold px-2 py-0.5 rounded",
+                            report.type === 'activity' ? "bg-som-olive/10 text-som-olive" : "bg-som-clay/10 text-som-clay"
+                          )}>
+                            {report.type === 'activity' ? 'Kegiatan' : 'Izin'}
+                          </span>
+                          <span className="text-[9px] font-mono opacity-40">{report.date}</span>
+                        </div>
+                        <p className="text-[11px] font-medium text-som-ink line-clamp-1">{report.title || report.description}</p>
+                        <div className="flex items-center justify-between mt-2">
+                          <span className={cn(
+                            "text-[8px] uppercase tracking-[0.1em] font-bold",
+                            report.status === 'approved' ? "text-green-500" :
+                            report.status === 'rejected' ? "text-red-500" : "text-yellow-500"
+                          )}>
+                            {report.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-8 opacity-30 italic text-sm serif">
+                      Belum ada laporan harian.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1954,7 +2714,12 @@ export default function Dashboard({
                                         <div className="space-y-1">
                                           <div className="flex items-center space-x-2">
                                             <span className="text-xs font-medium text-som-ink/80">{goal.title}</span>
-                                            {goal.progress === 100 && (
+                                            {(goal as any).isApproved ? (
+                                              <span className="text-[8px] uppercase tracking-widest font-bold text-white bg-green-600 px-2 py-0.5 rounded-full flex items-center space-x-1">
+                                                <ShieldCheck className="w-2.5 h-2.5" />
+                                                <span>Disetujui</span>
+                                              </span>
+                                            ) : goal.progress === 100 && (
                                               <span className="text-[8px] uppercase tracking-widest font-bold text-white bg-som-olive px-2 py-0.5 rounded-full">
                                                 Selesai
                                               </span>
@@ -1994,14 +2759,161 @@ export default function Dashboard({
                                           </div>
                                         ))}
                                       </div>
+
+                                      {/* Supervisor Evidence View & Approval */}
+                                      {goal.progress === 100 && (
+                                        <div className="mt-4 pt-4 border-t border-som-ink/5 space-y-4">
+                                          <div className="flex items-center justify-between">
+                                            <h6 className="text-[9px] uppercase tracking-widest font-bold text-som-ink/40">Evidence Submission</h6>
+                                            {!(goal as any).isApproved && (
+                                              <button 
+                                                onClick={() => handleApproveGoal(goal.id)}
+                                                className="text-[9px] uppercase tracking-widest font-bold text-som-olive hover:text-som-ink hover:underline transition-all flex items-center space-x-1"
+                                              >
+                                                <ShieldCheck className="w-3 h-3" />
+                                                <span>Approve Task</span>
+                                              </button>
+                                            )}
+                                          </div>
+
+                                          {((goal as any).submissionPhotoUrl || (goal as any).submissionLink) ? (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                              {(goal as any).submissionPhotoUrl && (
+                                                <div className="relative aspect-video rounded-xl overflow-hidden border border-som-ink/5">
+                                                  <img 
+                                                    src={(goal as any).submissionPhotoUrl} 
+                                                    alt="Bukti Foto" 
+                                                    className="w-full h-full object-cover"
+                                                    referrerPolicy="no-referrer"
+                                                  />
+                                                  <button 
+                                                    onClick={() => window.open((goal as any).submissionPhotoUrl, '_blank')}
+                                                    className="absolute top-2 right-2 p-1.5 bg-white/90 rounded-full text-som-ink shadow-sm"
+                                                  >
+                                                    <ExternalLink className="w-3 h-3" />
+                                                  </button>
+                                                </div>
+                                              )}
+                                              {(goal as any).submissionLink && (
+                                                <div className="p-3 rounded-xl bg-som-bg/50 border border-som-ink/5 space-y-2">
+                                                  <div className="flex items-center justify-between">
+                                                    <span className="text-[7px] uppercase tracking-widest font-bold text-som-ink/30">Attachment</span>
+                                                    {(goal as any).linkHealthStatus === 'safe' && <ShieldCheck className="w-3 h-3 text-green-600" />}
+                                                    {(goal as any).linkHealthStatus === 'suspicious' && <ShieldAlert className="w-3 h-3 text-red-500" />}
+                                                  </div>
+                                                  <a 
+                                                    href={(goal as any).submissionLink} 
+                                                    target="_blank" 
+                                                    rel="noopener noreferrer"
+                                                    className="text-[10px] text-som-olive font-medium truncate flex items-center space-x-1 hover:underline"
+                                                  >
+                                                    <LinkIcon className="w-2.5 h-2.5" />
+                                                    <span>Link URL</span>
+                                                  </a>
+                                                  {(goal as any).linkHealthReport && (
+                                                    <p className="text-[8px] text-som-ink/40 leading-tight italic">
+                                                      AI: {(goal as any).linkHealthReport}
+                                                    </p>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <p className="text-[9px] text-som-ink/30 italic">No evidence uploaded yet.</p>
+                                          )}
+                                          
+                                          {(goal as any).isApproved && (
+                                            <div className="p-2 rounded-lg bg-green-50 border border-green-100 flex items-center justify-center space-x-2">
+                                              <ShieldCheck className="w-3 h-3 text-green-600" />
+                                              <span className="text-[9px] font-bold text-green-600 uppercase tracking-widest">Task Approved</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   ))
                                 ) : (
                                   <p className="text-[10px] text-som-ink/30 italic">No tasks assigned yet.</p>
                                 )}
+                              <div className="mt-12 pt-8 border-t border-som-ink/5">
+                                <div className="flex items-center justify-between mb-8">
+                                  <div className="flex items-center space-x-3">
+                                    <div className="p-2 rounded-xl bg-som-ink/5 text-som-ink">
+                                      <Calendar className="w-5 h-5" />
+                                    </div>
+                                    <h3 className="serif text-2xl">Persetujuan Laporan & Izin</h3>
+                                  </div>
+                                  <div className="h-px flex-1 mx-8 bg-som-ink/5" />
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                  {reports.filter(r => r.supervisorId === user.id && r.status === 'pending').length > 0 ? (
+                                    reports.filter(r => r.supervisorId === user.id && r.status === 'pending').map(report => {
+                                      const intern = mockUsers.find(u => u.id === report.userId);
+                                      return (
+                                        <motion.div 
+                                          key={report.id}
+                                          layout
+                                          initial={{ opacity: 0, scale: 0.9 }}
+                                          animate={{ opacity: 1, scale: 1 }}
+                                          className="bg-white p-6 rounded-3xl border border-som-ink/5 shadow-sm space-y-4 flex flex-col justify-between"
+                                        >
+                                          <div>
+                                            <div className="flex items-center space-x-3 mb-4">
+                                              <div className="w-8 h-8 rounded-full bg-som-bg flex items-center justify-center text-[10px] font-bold overflow-hidden">
+                                                {intern?.photoURL ? (
+                                                  <img src={intern.photoURL} alt="" className="w-full h-full object-cover" />
+                                                ) : (
+                                                  intern?.name[0]
+                                                )}
+                                              </div>
+                                              <div>
+                                                <p className="text-[11px] font-bold text-som-ink">{intern?.name}</p>
+                                                <p className="text-[8px] uppercase tracking-widest text-som-ink/40 font-mono">{report.date}</p>
+                                              </div>
+                                            </div>
+                                            
+                                            <div className="space-y-2">
+                                              <span className={cn(
+                                                "text-[7px] uppercase tracking-widest font-bold px-2 py-0.5 rounded",
+                                                report.type === 'activity' ? "bg-som-olive/10 text-som-olive text-[8px]" : "bg-som-clay/10 text-som-clay text-[8px]"
+                                              )}>
+                                                {report.type === 'activity' ? 'Kegiatan' : 'Izin'}
+                                              </span>
+                                              {report.title && <p className="text-[11px] font-bold mt-1 text-som-ink line-clamp-1">{report.title}</p>}
+                                              <p className="text-[11px] text-som-ink/60 line-clamp-3 italic leading-relaxed">
+                                                "{report.description}"
+                                              </p>
+                                            </div>
+                                          </div>
+
+                                          <div className="flex items-center space-x-2 pt-4">
+                                            <button 
+                                              onClick={() => handleApproveReport(report.id, 'approved')}
+                                              className="flex-1 py-2.5 rounded-full bg-som-olive text-white text-[9px] uppercase tracking-widest font-bold hover:bg-som-ink transition-all shadow-lg shadow-som-olive/10"
+                                            >
+                                              Setujui
+                                            </button>
+                                            <button 
+                                              onClick={() => handleApproveReport(report.id, 'rejected')}
+                                              className="px-4 py-2.5 rounded-full bg-som-bg text-som-ink/40 text-[9px] uppercase tracking-widest font-bold hover:bg-red-50 hover:text-red-500 transition-all"
+                                            >
+                                              Tolak
+                                            </button>
+                                          </div>
+                                        </motion.div>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="col-span-full py-12 text-center bg-som-bg/20 rounded-[2rem] border border-dashed border-som-ink/10">
+                                      <p className="text-sm text-som-ink/30 italic serif">Semua laporan telah ditinjau.</p>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </motion.div>
+                          </div>
+                        </motion.div>
                         );
                       })
                   ) : (
@@ -2015,6 +2927,72 @@ export default function Dashboard({
 
               {/* Sidebar for Supervisor */}
               <div className="space-y-8">
+                {/* Supervisor Daily Attendance Card */}
+                <div className="bg-som-olive text-white p-8 rounded-[2.5rem] shadow-xl shadow-som-olive/20 relative overflow-hidden group">
+                  <div className="absolute -right-4 -top-4 w-32 h-32 bg-white/10 rounded-full blur-3xl group-hover:bg-white/20 transition-colors" />
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-8">
+                      <div className="flex items-center space-x-3">
+                        <div className="p-2 rounded-xl bg-white/10">
+                          <Clock className="w-5 h-5" />
+                        </div>
+                        <h3 className="serif text-2xl">Daily Presence</h3>
+                      </div>
+                      <div className="text-[10px] font-mono opacity-50">{today}</div>
+                    </div>
+
+                    {!userAttendanceToday ? (
+                      <div className="space-y-6">
+                        <p className="text-sm font-light opacity-80">Mark your presence for today as Supervisor.</p>
+                        {isWeekend && (
+                          <div className="px-3 py-1 rounded-full bg-white/10 border border-white/20 inline-block">
+                            <span className="text-[8px] uppercase tracking-widest font-bold">Weekend Attendance</span>
+                          </div>
+                        )}
+                        <button 
+                          onClick={handleDailyCheckIn}
+                          className="w-full py-4 rounded-full bg-white text-som-olive font-bold text-[10px] uppercase tracking-[0.2em] hover:bg-som-bg transition-all shadow-lg"
+                        >
+                          Check-in
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="p-4 rounded-2xl bg-white/10 border border-white/10">
+                            <p className="text-[8px] uppercase tracking-widest font-bold opacity-50 mb-1">Check-in</p>
+                            <p className="text-xl serif">{userAttendanceToday.checkIn}</p>
+                          </div>
+                          <div className="p-4 rounded-2xl bg-white/10 border border-white/10">
+                            <p className="text-[8px] uppercase tracking-widest font-bold opacity-50 mb-1">Check-out</p>
+                            <p className="text-xl serif">{userAttendanceToday.checkOut || '--:--'}</p>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <div className={cn(
+                              "w-2 h-2 rounded-full",
+                              userAttendanceToday.status === 'present' ? "bg-green-400" : "bg-yellow-400"
+                            )} />
+                            <span className="text-[10px] uppercase tracking-widest font-bold opacity-80">
+                              Logged: {userAttendanceToday.status}
+                            </span>
+                          </div>
+                          {!userAttendanceToday.checkOut && (
+                            <button 
+                              onClick={handleDailyCheckOut}
+                              className="text-[10px] uppercase tracking-widest font-bold border-b border-white/30 pb-1 hover:border-white transition-colors"
+                            >
+                              Check-out
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Team Overview Card */}
                 <div className="bg-white p-8 rounded-[2.5rem] border border-som-ink/5 shadow-sm">
                   <div className="flex items-center space-x-3 mb-8">
@@ -2567,10 +3545,10 @@ export default function Dashboard({
             animate={{ opacity: 1, y: 0 }}
             className="max-w-4xl mx-auto"
           >
-            <div className="bg-white p-12 rounded-[3rem] border border-som-ink/5 shadow-sm">
-              <div className="flex flex-col md:flex-row gap-12">
+            <div className="bg-white p-6 sm:p-8 md:p-12 rounded-[2rem] sm:rounded-[3rem] border border-som-ink/5 shadow-sm">
+              <div className="flex flex-col lg:flex-row gap-8 md:gap-12">
                 {/* Photo Section */}
-                <div className="flex flex-col items-center space-y-6">
+                <div className="flex flex-col items-center space-y-6 lg:w-40 shrink-0">
                   <div className="relative group">
                     <div className="w-40 h-40 rounded-full overflow-hidden border-4 border-som-bg shadow-xl">
                       <img 
@@ -2598,7 +3576,7 @@ export default function Dashboard({
 
                 {/* Form Section */}
                 <form onSubmit={handleUpdateProfile} className="flex-1 space-y-8">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
                     <div className="space-y-2">
                       <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Full Name</label>
                       <input 
@@ -2673,7 +3651,7 @@ export default function Dashboard({
                     )}
                   </div>
 
-                  <div className="pt-8 flex items-center justify-between">
+                  <div className="pt-8 flex flex-col sm:flex-row items-center justify-between space-y-4 sm:space-y-0">
                     <div className="flex items-center space-x-3">
                       <AnimatePresence>
                         {profileSuccess && (
@@ -2692,7 +3670,7 @@ export default function Dashboard({
                     <button 
                       type="submit"
                       disabled={isUpdatingProfile}
-                      className="bg-som-ink text-white text-[10px] uppercase tracking-[0.2em] font-bold px-12 py-5 rounded-full hover:bg-som-olive transition-all shadow-xl shadow-som-ink/10 disabled:opacity-50"
+                      className="w-full sm:w-auto bg-som-ink text-white text-[10px] uppercase tracking-[0.2em] font-bold px-12 py-5 rounded-full hover:bg-som-olive transition-all shadow-xl shadow-som-ink/10 disabled:opacity-50"
                     >
                       {isUpdatingProfile ? 'Updating...' : 'Save Changes'}
                     </button>
@@ -2718,6 +3696,113 @@ export default function Dashboard({
           </p>
         </div>
       </footer>
+
+      {/* Report Modal */}
+      <AnimatePresence>
+        {showReportModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowReportModal(false)}
+              className="absolute inset-0 bg-som-ink/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg bg-white rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-3rem)]"
+            >
+              <div className="p-6 sm:p-8 border-b border-som-ink/5 shrink-0">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-xl bg-som-olive/10 text-som-olive shrink-0">
+                      <Calendar className="w-5 h-5" />
+                    </div>
+                    <h3 className="serif text-xl sm:text-2xl">Laporan Baru</h3>
+                  </div>
+                  <button onClick={() => setShowReportModal(false)} className="p-2 hover:bg-som-bg rounded-full transition-colors shrink-0">
+                    <X className="w-5 h-5 opacity-40" />
+                  </button>
+                </div>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Laporkan kegiatan atau izin harian</p>
+              </div>
+
+              <div className="overflow-y-auto flex-1 custom-scrollbar">
+                <form onSubmit={handleCreateReport} className="p-6 sm:p-8 space-y-6">
+                  <div className="flex bg-som-bg p-1 rounded-2xl border border-som-ink/5">
+                    <button 
+                      type="button"
+                      onClick={() => setReportType('activity')}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl text-[10px] uppercase tracking-widest font-bold transition-all",
+                        reportType === 'activity' ? "bg-white text-som-ink shadow-sm" : "text-som-ink/40"
+                      )}
+                    >
+                      Kegiatan
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setReportType('permission')}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl text-[10px] uppercase tracking-widest font-bold transition-all",
+                        reportType === 'permission' ? "bg-white text-som-ink shadow-sm" : "text-som-ink/40"
+                      )}
+                    >
+                      Izin
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Tanggal</label>
+                    <input 
+                      type="date" 
+                      value={reportContent.date}
+                      onChange={(e) => setReportContent(prev => ({ ...prev, date: e.target.value }))}
+                      className="w-full bg-som-bg border-none rounded-2xl px-5 sm:px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                    />
+                  </div>
+
+                  {reportType === 'activity' && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Judul Kegiatan</label>
+                      <input 
+                        type="text" 
+                        placeholder="Contoh: Menyelesaikan Modul 1"
+                        value={reportContent.title}
+                        onChange={(e) => setReportContent(prev => ({ ...prev, title: e.target.value }))}
+                        className="w-full bg-som-bg border-none rounded-2xl px-5 sm:px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40">Keterangan</label>
+                    <textarea 
+                      rows={4}
+                      placeholder={reportType === 'activity' ? "Ceritakan apa yang anda peroleh hari ini..." : "Berikan alasan detail untuk izin/sakit..."}
+                      value={reportContent.description}
+                      onChange={(e) => setReportContent(prev => ({ ...prev, description: e.target.value }))}
+                      className="w-full bg-som-bg border-none rounded-2xl px-5 sm:px-6 py-4 text-sm focus:ring-2 focus:ring-som-olive transition-all resize-none"
+                    />
+                  </div>
+
+                  <div className="pt-4">
+                    <button 
+                      type="submit"
+                      disabled={isSubmittingReport}
+                      className="w-full bg-som-ink text-white text-[10px] uppercase tracking-[0.2em] font-bold py-5 rounded-full hover:bg-som-olive transition-all shadow-xl shadow-som-ink/10 disabled:opacity-50"
+                    >
+                      {isSubmittingReport ? 'Mengirim...' : 'Kirim Laporan'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

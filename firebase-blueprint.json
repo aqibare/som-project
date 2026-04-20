@@ -51,7 +51,14 @@
               "completed": { "type": "boolean" }
             }
           }
-        }
+        },
+        "submissionPhotoUrl": { "type": "string" },
+        "submissionLink": { "type": "string" },
+        "linkHealthStatus": { "type": "string", "enum": ["safe", "suspicious", "unknown"] },
+        "linkHealthReport": { "type": "string" },
+        "isApproved": { "type": "boolean" },
+        "approvedAt": { "type": "string" },
+        "approvedBy": { "type": "string" }
       },
       "required": ["id", "userId", "title", "progress", "category", "steps"]
     },
@@ -65,9 +72,28 @@
         "date": { "type": "string", "format": "date" },
         "checkIn": { "type": "string" },
         "checkOut": { "type": "string" },
-        "status": { "type": "string", "enum": ["present", "absent", "late"] }
+        "status": { "type": "string", "enum": ["present", "absent", "late", "excused"] }
       },
       "required": ["id", "userId", "date", "checkIn", "status"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Daily activity report or permission request.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "supervisorId": { "type": "string" },
+        "type": { "type": "string", "enum": ["activity", "permission"] },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string" },
+        "approvedAt": { "type": "string" },
+        "approvedBy": { "type": "string" }
+      },
+      "required": ["id", "userId", "type", "description", "date", "status", "createdAt"]
     },
     "Evaluation": {
       "title": "Evaluation",
@@ -134,6 +160,10 @@
     "/notifications/{notificationId}": {
       "schema": "Notification",
       "description": "User notifications."
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Activity reports and permissions."
     },
     "/settings/schedule": {
       "schema": "Schedule",

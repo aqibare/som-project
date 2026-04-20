@@ -14,6 +14,13 @@ export interface Goal {
   steps: { id: string; title: string; completed: boolean }[];
   createdAt?: string;
   completedAt?: string;
+  submissionPhotoUrl?: string;
+  submissionLink?: string;
+  linkHealthStatus?: 'safe' | 'suspicious' | 'unknown';
+  linkHealthReport?: string;
+  isApproved?: boolean;
+  approvedAt?: string;
+  approvedBy?: string;
 }
 
 export interface Evaluation {
@@ -109,3 +116,5 @@ export const INITIAL_SCHEDULE: Schedule = {
 };
 
 export const INITIAL_NOTIFICATIONS: Notification[] = [];
+
+export const INITIAL_REPORTS: any[] = [];
