@@ -1,0 +1,60 @@
+name: Deploy SOM to HestiaCP via Cloudflare Tunnel
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build project
+        run: npm run build
+
+      - name: Install cloudflared
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Configure SSH to use Cloudflare Tunnel
+        run: |
+          mkdir -p ~/.ssh
+          {
+            echo "Host deploy-server"
+            echo "  HostName ${{ secrets.SSH_HOSTNAME }}"
+            echo "  User ${{ secrets.SSH_USER }}"
+            echo "  IdentityFile ~/.ssh/id_ed25519"
+            echo "  StrictHostKeyChecking no"
+            echo "  ProxyCommand cloudflared access ssh --hostname %h"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy via rsync
+        run: |
+          rsync -avz --delete --omit-dir-times --no-perms \
+            --exclude '.git*' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude 'src' \
+            --exclude '*.md' \
+            --exclude 'cloudflared.deb' \
+            -e "ssh -F $HOME/.ssh/config" \
+            ./dist/ deploy-server:${{ secrets.DEPLOY_PATH }}/
