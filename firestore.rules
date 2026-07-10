@@ -215,7 +215,7 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isOwner(userId) || resource.data.supervisorId == request.auth.uid || isAdmin();
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
       allow delete: if isAdmin();
@@ -253,7 +253,7 @@ service cloud.firestore {
 
     match /notifications/{notificationId} {
       allow read: if isOwner(resource.data.userId) || isAdmin();
-      allow create: if isAuthenticated() && isValidNotification(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin() || isSupervisorOf(request.resource.data.userId));
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data) && (isOwner(request.resource.data.userId) || isAdmin() || isSupervisorOf(request.resource.data.userId) || request.resource.data.senderId == request.auth.uid);
       allow update: if isOwner(resource.data.userId) && hasOnlyAllowedFields(['read']) || isAdmin();
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }

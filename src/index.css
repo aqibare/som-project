@@ -15,6 +15,25 @@ body {
   @apply bg-som-bg text-som-ink font-sans antialiased;
 }
 
+/* Custom sleek scrollbar utilities */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
 h1, h2, h3, h4, h5, h6, .serif {
   @apply font-serif;
 }

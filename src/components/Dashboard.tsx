@@ -51,6 +51,88 @@ export default function Dashboard({
 }: DashboardProps) {
   const today = new Date().toISOString().split('T')[0];
   const isWeekend = [0, 6].includes(new Date().getDay());
+
+  // Computed dynamic, real-time recent check-in history from the real-time attendance collection
+  const internRecentCheckIns = attendance
+    .filter(a => a.userId === user.id)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5)
+    .map(record => {
+      const recordDate = new Date(record.date);
+      const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const dayName = dayNames[recordDate.getDay()];
+      const dateFormatted = `${dayName}, ${recordDate.getDate()} ${monthNames[recordDate.getMonth()]} ${recordDate.getFullYear()}`;
+      
+      let statusLabel = 'Hadir';
+      if (record.status === 'late') statusLabel = 'Terlambat';
+      else if (record.status === 'excused') statusLabel = 'Izin';
+      else if (record.status === 'absent') statusLabel = 'Absen';
+
+      return {
+        id: record.id,
+        title: `${statusLabel} (Check-in)`,
+        time: `Masuk: ${record.checkIn}${record.checkOut ? ` | Keluar: ${record.checkOut}` : ' (Aktif)'}`,
+        date: dateFormatted,
+        status: record.status
+      };
+    });
+
+  const supervisedInternIds = mockUsers.filter(u => u.supervisorId === user.id).map(u => u.id);
+  const supervisorRecentCheckIns = attendance
+    .filter(a => supervisedInternIds.includes(a.userId))
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5)
+    .map(record => {
+      const intern = mockUsers.find(u => u.id === record.userId);
+      const internName = intern ? intern.name : 'Peserta';
+      const recordDate = new Date(record.date);
+      const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const dayName = dayNames[recordDate.getDay()];
+      const dateFormatted = `${dayName}, ${recordDate.getDate()} ${monthNames[recordDate.getMonth()]} ${recordDate.getFullYear()}`;
+
+      let statusLabel = 'Hadir';
+      if (record.status === 'late') statusLabel = 'Terlambat';
+      else if (record.status === 'excused') statusLabel = 'Izin';
+      else if (record.status === 'absent') statusLabel = 'Absen';
+
+      return {
+        id: record.id,
+        internId: record.userId,
+        title: `${internName} - ${statusLabel}`,
+        time: `Masuk: ${record.checkIn}${record.checkOut ? ` | Keluar: ${record.checkOut}` : ' (Aktif)'}`,
+        date: dateFormatted,
+        status: record.status
+      };
+    });
+
+  const adminRecentCheckIns = attendance
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5)
+    .map(record => {
+      const intern = mockUsers.find(u => u.id === record.userId);
+      const internName = intern ? intern.name : 'Peserta';
+      const recordDate = new Date(record.date);
+      const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const dayName = dayNames[recordDate.getDay()];
+      const dateFormatted = `${dayName}, ${recordDate.getDate()} ${monthNames[recordDate.getMonth()]} ${recordDate.getFullYear()}`;
+
+      let statusLabel = 'Hadir';
+      if (record.status === 'late') statusLabel = 'Terlambat';
+      else if (record.status === 'excused') statusLabel = 'Izin';
+      else if (record.status === 'absent') statusLabel = 'Absen';
+
+      return {
+        id: record.id,
+        internId: record.userId,
+        title: `${internName} - ${statusLabel}`,
+        time: `Masuk: ${record.checkIn}${record.checkOut ? ` | Keluar: ${record.checkOut}` : ' (Aktif)'}`,
+        date: dateFormatted,
+        status: record.status
+      };
+    });
   const [selectedSupervisor, setSelectedSupervisor] = useState('');
   const [selectedIntern, setSelectedIntern] = useState('');
   const [showAssignSuccess, setShowAssignSuccess] = useState(false);
@@ -144,8 +226,10 @@ export default function Dashboard({
 
   const userAttendanceToday = attendance.find(a => a.userId === user.id && a.date === today);
 
-  // Check for late interns and generate notifications
+  // Check for late interns and generate notifications (only for admins and supervisors)
   React.useEffect(() => {
+    if (user.role !== 'admin' && user.role !== 'supervisor') return;
+    
     const checkLateInterns = () => {
       const now = new Date();
       const currentToday = now.toISOString().split('T')[0];
@@ -1579,6 +1663,41 @@ export default function Dashboard({
                     </div>
                   </div>
                 </div>
+
+                {/* Admin Recent Check-ins (Log Riwayat) Card */}
+                <div className="bg-som-ink text-white p-8 rounded-[2rem] shadow-xl shadow-som-ink/20 mt-8">
+                  <div className="flex items-center space-x-3 mb-6">
+                    <ArrowUpRight className="w-5 h-5 text-som-olive" />
+                    <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold">Recent Check-ins (Log Riwayat)</h4>
+                  </div>
+                  <div className="space-y-4">
+                    {adminRecentCheckIns.length > 0 ? (
+                      adminRecentCheckIns.map((log) => (
+                        <div 
+                          key={log.id} 
+                          onClick={() => setSelectedInternForAttendance(log.internId)}
+                          className="flex justify-between items-center border-b border-white/10 pb-2 last:border-0 cursor-pointer hover:bg-white/5 p-1.5 rounded transition-all"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-xs font-medium">{log.title}</span>
+                            <span className="text-[9px] text-som-olive uppercase tracking-wider">{log.time}</span>
+                            <span className="text-[8px] text-white/40 uppercase tracking-widest">{log.date}</span>
+                          </div>
+                          <div className={cn(
+                            "p-1 rounded-full",
+                            log.status === 'present' ? "bg-green-500/20 text-green-400" :
+                            log.status === 'late' ? "bg-yellow-500/20 text-yellow-400" :
+                            log.status === 'excused' ? "bg-blue-500/20 text-blue-400" : "bg-red-500/20 text-red-400"
+                          )}>
+                            <ArrowUpRight className="w-3 h-3" />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-[10px] text-white/40 italic font-light">Belum ada riwayat check-in sistem.</p>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Mentorship Monitoring */}
@@ -2405,31 +2524,43 @@ export default function Dashboard({
                 </div>
               </div>
 
-              <div className="bg-som-ink text-white p-8 rounded-[2rem] shadow-xl shadow-som-ink/20">
-                <div className="flex items-center space-x-3 mb-6">
-                  <ArrowUpRight className="w-5 h-5 text-som-olive" />
-                  <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold">Recent Check-ins</h4>
+              <div className="bg-som-ink text-white p-6 rounded-3xl shadow-xl shadow-som-ink/20">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center space-x-2">
+                    <Clock className="w-4 h-4 text-som-olive animate-pulse" />
+                    <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold">Recent Check-ins</h4>
+                  </div>
+                  <span className="text-[8px] uppercase tracking-widest font-mono text-white/40">Log Aktif</span>
                 </div>
-                <div className="space-y-4">
-                  {checkInLog.length > 0 ? (
-                    checkInLog.map((log) => (
-                      <div key={log.id} className="flex justify-between items-center border-b border-white/10 pb-2 last:border-0">
-                        <div className="flex flex-col">
-                          <span className="text-xs font-medium">{log.goalTitle}</span>
-                          <span className="text-[8px] text-white/40 uppercase tracking-widest">{log.date}</span>
+                <div className="max-h-52 overflow-y-auto pr-1 space-y-3 custom-scrollbar">
+                  {internRecentCheckIns.length > 0 ? (
+                    internRecentCheckIns.map((log) => (
+                      <div key={log.id} className="flex justify-between items-center border-b border-white/5 pb-2 last:border-0 hover:bg-white/5 p-1 rounded transition-colors duration-150">
+                        <div className="flex flex-col min-w-0 flex-1">
+                          <span className="text-xs font-semibold truncate text-white">{log.title}</span>
+                          <span className="text-[9px] text-som-olive font-mono truncate">{log.time}</span>
+                          <span className="text-[8px] text-white/40 font-mono tracking-wider mt-0.5">{log.date}</span>
                         </div>
-                        <div className="p-1 rounded-full bg-som-olive/20 text-som-olive">
+                        <div className={cn(
+                          "p-1.5 rounded-full shrink-0 ml-2",
+                          log.status === 'present' ? "bg-green-500/20 text-green-400" :
+                          log.status === 'late' ? "bg-yellow-500/20 text-yellow-400" :
+                          log.status === 'excused' ? "bg-blue-500/20 text-blue-400" : "bg-red-500/20 text-red-400"
+                        )}>
                           <Check className="w-3 h-3" />
                         </div>
                       </div>
                     ))
                   ) : (
-                    <p className="text-[10px] text-white/40 italic">No check-ins today yet.</p>
+                    <p className="text-[10px] text-white/40 italic py-2">Belum ada riwayat check-in.</p>
                   )}
                 </div>
-                <div className="mt-6 flex items-center space-x-2 text-[10px] font-bold text-som-olive cursor-pointer hover:underline">
-                  <span>View All History</span>
-                  <ArrowUpRight className="w-3 h-3" />
+                <div 
+                  onClick={() => setSelectedInternForAttendance(user.id)}
+                  className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] font-bold text-som-olive cursor-pointer hover:text-white transition-all duration-150"
+                >
+                  <span>Lihat Semua Riwayat</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
                 </div>
               </div>
 
@@ -2487,56 +2618,56 @@ export default function Dashboard({
               </div>
 
               {/* Supervisor Feedback Section */}
-              <div className="bg-white p-8 rounded-[2rem] border border-som-ink/5 shadow-sm">
-                <div className="flex items-center justify-between mb-8">
+              <div className="bg-white p-6 md:p-8 rounded-3xl md:rounded-[2rem] border border-som-ink/5 shadow-sm">
+                <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center space-x-3">
                     <div className="p-2 rounded-xl bg-som-olive/10 text-som-olive">
-                      <Bell className="w-5 h-5" />
+                      <Bell className="w-4 h-4 md:w-5 md:h-5" />
                     </div>
-                    <h3 className="serif text-2xl">Supervisor Feedback</h3>
+                    <h3 className="serif text-xl md:text-2xl">Supervisor Feedback</h3>
                   </div>
-                  <span className="text-[10px] font-mono text-som-ink/30">
+                  <span className="text-[10px] font-mono text-som-ink/30 bg-som-bg px-2 py-0.5 rounded-full">
                     {evaluations.filter(e => e.internId === user.id).length} Total
                   </span>
                 </div>
 
-                <div className="space-y-6 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                <div className="space-y-4 max-h-[280px] md:max-h-[350px] overflow-y-auto pr-1.5 custom-scrollbar">
                   {evaluations
                     .filter(e => e.internId === user.id)
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
                     .map((evaluation) => (
-                      <div key={evaluation.id} className="p-6 rounded-2xl bg-som-bg/30 border border-som-ink/5 space-y-4">
+                      <div key={evaluation.id} className="p-4 md:p-5 rounded-2xl bg-som-bg/30 border border-som-ink/5 space-y-3">
                         <div className="flex justify-between items-start">
                           <div>
-                            <p className="text-[10px] uppercase tracking-widest font-bold text-som-ink/40 mb-1">{evaluation.date}</p>
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xl serif text-som-olive">{evaluation.score}%</span>
-                              <span className="text-[10px] text-som-ink/30 uppercase tracking-tighter">Performance Score</span>
+                            <p className="text-[9px] uppercase tracking-widest font-mono text-som-ink/40 mb-0.5">{evaluation.date}</p>
+                            <div className="flex items-center space-x-1.5">
+                              <span className="text-lg md:text-xl font-bold text-som-olive">{evaluation.score}%</span>
+                              <span className="text-[8px] md:text-[9px] text-som-ink/40 uppercase tracking-wider font-medium">Performance Score</span>
                             </div>
                           </div>
                           {evaluation.reaction && (
-                            <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm text-lg">
+                            <div className="w-7 h-7 md:w-8 md:h-8 rounded-full bg-white flex items-center justify-center shadow-sm text-sm md:text-base">
                               {evaluation.reaction}
                             </div>
                           )}
                         </div>
                         
-                        <p className="text-sm text-som-ink/70 font-light leading-relaxed italic">
+                        <p className="text-xs md:text-sm text-som-ink/80 font-light leading-relaxed italic bg-white/40 p-3 rounded-xl border border-som-ink/5">
                           "{evaluation.feedback}"
                         </p>
 
-                        <div className="pt-4 border-t border-som-ink/5 flex items-center justify-between">
-                          <span className="text-[9px] uppercase tracking-widest font-bold text-som-ink/30">React to feedback</span>
-                          <div className="flex space-x-2">
+                        <div className="pt-3 border-t border-som-ink/5 flex items-center justify-between">
+                          <span className="text-[9px] uppercase tracking-widest font-bold text-som-ink/30">React</span>
+                          <div className="flex space-x-1.5">
                             {['👍', '🙏', '🔥', '💡'].map((emoji) => (
                               <button
                                 key={emoji}
                                 onClick={() => handleReaction(evaluation.id, emoji)}
                                 className={cn(
-                                  "w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110",
+                                  "w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-xs md:text-sm transition-all duration-150 hover:scale-110",
                                   evaluation.reaction === emoji 
-                                    ? "bg-som-olive text-white shadow-lg shadow-som-olive/20" 
-                                    : "bg-white text-som-ink/40 hover:bg-som-bg"
+                                    ? "bg-som-olive text-white shadow-md shadow-som-olive/20" 
+                                    : "bg-white text-som-ink/40 hover:bg-som-bg border border-som-ink/5"
                                 )}
                               >
                                 {emoji}
@@ -2548,8 +2679,8 @@ export default function Dashboard({
                     ))}
                   
                   {evaluations.filter(e => e.internId === user.id).length === 0 && (
-                    <div className="text-center py-12">
-                      <p className="text-sm text-som-ink/30 serif italic">No feedback received yet.</p>
+                    <div className="text-center py-8">
+                      <p className="text-xs text-som-ink/30 serif italic">Belum ada feedback dari supervisor.</p>
                     </div>
                   )}
                 </div>
@@ -3116,6 +3247,41 @@ export default function Dashboard({
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* Supervisor Recent Check-ins (Log Riwayat) Card */}
+                <div className="bg-som-ink text-white p-8 rounded-[2.5rem] shadow-xl shadow-som-ink/20">
+                  <div className="flex items-center space-x-3 mb-6">
+                    <ArrowUpRight className="w-5 h-5 text-som-olive" />
+                    <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold">Recent Check-ins (Log Riwayat)</h4>
+                  </div>
+                  <div className="space-y-4">
+                    {supervisorRecentCheckIns.length > 0 ? (
+                      supervisorRecentCheckIns.map((log) => (
+                        <div 
+                          key={log.id} 
+                          onClick={() => setSelectedInternForAttendance(log.internId)}
+                          className="flex justify-between items-center border-b border-white/10 pb-2 last:border-0 cursor-pointer hover:bg-white/5 p-1.5 rounded transition-all"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-xs font-medium">{log.title}</span>
+                            <span className="text-[9px] text-som-olive uppercase tracking-wider">{log.time}</span>
+                            <span className="text-[8px] text-white/40 uppercase tracking-widest">{log.date}</span>
+                          </div>
+                          <div className={cn(
+                            "p-1 rounded-full",
+                            log.status === 'present' ? "bg-green-500/20 text-green-400" :
+                            log.status === 'late' ? "bg-yellow-500/20 text-yellow-400" :
+                            log.status === 'excused' ? "bg-blue-500/20 text-blue-400" : "bg-red-500/20 text-red-400"
+                          )}>
+                            <ArrowUpRight className="w-3 h-3" />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-[10px] text-white/40 italic font-light">Belum ada riwayat check-in tim.</p>
+                    )}
                   </div>
                 </div>
 
